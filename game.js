@@ -3,31 +3,69 @@
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
 const heading = document.querySelector("#room-name");
+const rivetControl = document.querySelector("#rivet-control");
 const status = document.querySelector("#status");
 const announcement = document.querySelector("#announcement");
+const intro = document.querySelector("#intro");
+const introArt = document.querySelector("#intro-art");
+const introCaption = document.querySelector("#intro-caption");
+const introPlay = document.querySelector("#intro-play");
+const introSkip = document.querySelector("#intro-skip");
+let introStarted = null;
+const heroPicker = document.querySelector("#hero-picker");
+const levelPicker = document.querySelector("#level-picker");
+const levelOptions = levelPicker.querySelectorAll("button[data-stage]");
 const {width: W, height: H} = canvas;
 const floor = 465;
 const ceiling = 105;
 const pit = {x: 300, end: 510};
 const block = {x: 394, y: 111, w: 50, h: 50};
-const rewards = [
-  {name: "Scatter Blaster", icon: "✷", color: "#ffbc69"},
-  {name: "Ricochet Blaster", icon: "↪", color: "#7be0ff"},
-  {name: "Plasma Blade", icon: "✦", color: "#e3a8ff"}
-];
+const scatterBlaster = {name: "Scatter Blaster", icon: "✷", color: "#ffbc69", description: "J · Fires three bolts in a spread"};
+const ricochetBlaster = {name: "Ricochet Blaster", icon: "↪", color: "#7be0ff", description: "J · Bolts bounce off a surface once"};
+const plasmaBlade = {name: "Plasma Blade", icon: "✦", color: "#e3a8ff", description: "K · Reaches farther and breaks blocks"};
+const pulseCannon = {name: "Pulse Cannon", icon: "◉", color: "#fc8e91", description: "J · Slow, heavy shots hit twice as hard"};
+const rapidBlaster = {name: "Rapid Blaster", icon: "»", color: "#a6eda1", description: "J · Hold to fire a stream of bolts"};
+const shockBlade = {name: "Shock Blade", icon: "ϟ", color: "#f7e77c", description: "K · A clean hit stuns guards and captains"};
+const rewards = [scatterBlaster, ricochetBlaster, plasmaBlade, pulseCannon, rapidBlaster, shockBlade];
+const heroes = {
+  pyre: {armor: "#cb844d", trim: "#f5b867", helmet: "#e0a25d", crest: "#ffdf90", light: "#65dee7", bright: "#b5fafa"},
+  volt: {armor: "#315f9c", trim: "#6496e6", helmet: "#485fc2", crest: "#91baf7", light: "#e5ff75", bright: "#f0ffa4"},
+  nova: {armor: "#814aa0", trim: "#d18bdd", helmet: "#a266b9", crest: "#ffc2ed", light: "#ffa0e0", bright: "#ffd3f1"},
+  frost: {armor: "#8aaabf", trim: "#d5eaf5", helmet: "#c5dfed", crest: "#f6ffff", light: "#54e1ff", bright: "#a9f7ff"},
+  mantis: {armor: "#2d7766", trim: "#74bda1", helmet: "#328c74", crest: "#a4e4ae", light: "#d8ff91", bright: "#f1ffbe"},
+  wraith: {armor: "#414456", trim: "#77798d", helmet: "#34354a", crest: "#9d90a7", light: "#ff707f", bright: "#ffadb4"}
+};
+let heroStyle = "pyre";
+const menuOpen = () => intro.open || heroPicker.open || levelPicker.open;
 const keys = new Set();
 const pressed = new Set();
 let hero, guard, shots, wheel, reward, remaining, used, mode, attempts;
 let stage = 0;
-const cargoNames = ["Lift Shaft", "Furnace Walk", "Loading Dock"];
-const catwalk = {x: 435, end: 740, y: 171, h: 20};
-let liftTime, lift, hostile;
-const cargo = () => stage > 0;
-const shaft = () => stage === 1;
-const furnaceGap = {x: 330, end: 478};
-const dockGap = {x: 490, end: 635};
-const fireGap = () => stage === 2 ? furnaceGap : dockGap;
-const hasWeaponBlock = () => stage === 0 || stage === 2;
+let hostile;
+const hatchery = () => stage >= 1 && stage <= 4;
+const commandDeck = () => stage === 5 || stage === 6;
+const reactor = () => stage === 7;
+const lab = () => stage === 8;
+const captainRoom = () => stage >= 6;
+const hasRivet = () => stage >= 5;
+const hasSwitch = () => stage === 5 || lab();
+const labGap = {x: 372, end: 650};
+const beamZones = [{x: 285, end: 430}, {x: 526, end: 655}];
+let reactorTime;
+const ceilingSwitch = {x: 605, y: ceiling + 22};
+let rivet, switchHeld;
+const deckRoom = () => captainRoom() ? "Captain’s Bridge" : "Charging Bay";
+const nests = [
+  {name: "Incubation Row", eggs: [310, 515, 730], flyers: [385], guard: 0},
+  {name: "Brood Bridge", eggs: [250, 760], flyers: [370, 625], guard: 0, gap: {x: 360, end: 640}},
+  {name: "Feeding Chamber", eggs: [350, 560, 680], flyers: [560, 820], guard: 3},
+  {name: "Nest Gate", eggs: [], flyers: [335, 555, 780], guard: 4, gap: {x: 410, end: 675}}
+];
+const nest = () => nests[stage - 1];
+let eggs, aliens, nestTime;
+const aliensLeft = () => aliens.filter(alien => alien.hp > 0).length;
+const exitLocked = () => Boolean(guard.hp || (stage === 4 && aliensLeft()) || (hasSwitch() && !switchHeld));
+const hasWeaponBlock = () => stage === 0 || stage === 3 || captainRoom();
 let blink = 0;
 let clock = 0;
 let notice = "";
@@ -37,15 +75,21 @@ function announce(message) {
 }
 
 function reset() {
-  hero = {x: 88, y: floor - 20, vy: 0, gravity: 1, face: 1, grounded: true, fire: 0, swing: 0, flash: 0, hp: 3};
+  hero = {x: 88, y: floor - 20, vy: 0, gravity: 1, face: 1, grounded: true, fire: 0, muzzleUntil: 0, swing: 0, flash: 0, hp: 3};
   guard = {x: 781, y: floor - 24, face: -1, hp: 3, phase: "patrol", time: 0, hit: 0};
-  if (cargo()) {
-    hero.hp = 2;
-    guard.hp = stage === 1 ? 0 : 4;
-    guard.gun = stage === 2;
+  guard.hp = hatchery() ? nest().guard : guard.hp;
+  if (hasRivet()) {
+    guard.hp = captainRoom() ? (lab() ? 10 : 8) : 0;
+    guard.gravity = 1;
+    guard.gun = captainRoom();
   }
-  liftTime = 0;
-  lift = {x: 244, end: 410, y: 460, h: 18};
+  rivet = hasRivet() ? {x: hero.x - 36, y: hero.y + 4, gravity: 1, cooldown: 0, flash: 0} : null;
+  reactorTime = 0;
+  switchHeld = false;
+  rivetControl.hidden = !hasRivet();
+  eggs = hatchery() ? nest().eggs.map(x => ({x, y: floor - 18, timer: null})) : [];
+  aliens = hatchery() ? nest().flyers.map(x => ({x, home: x, y: ceiling + 31, hp: 2, flying: true})) : [];
+  nestTime = 0;
   hostile = [];
   shots = [];
   wheel = reward = null;
@@ -57,13 +101,14 @@ function reset() {
 }
 
 function press(code) {
+  gameAudio.start();
   if (!keys.has(code)) pressed.add(code);
   keys.add(code);
 }
 
-const controls = new Set(["ArrowLeft", "ArrowRight", "KeyA", "KeyD", "Space", "KeyE", "KeyJ", "KeyK", "KeyR"]);
+const controls = new Set(["ArrowLeft", "ArrowRight", "KeyA", "KeyD", "Space", "KeyE", "KeyJ", "KeyK", "KeyF", "KeyR"]);
 addEventListener("keydown", event => {
-  if (controls.has(event.code) && !(event.code === "Space" && event.target.closest?.("button"))) {
+  if (!menuOpen() && controls.has(event.code) && !(event.code === "Space" && event.target.closest?.("button"))) {
     event.preventDefault();
     press(event.code);
   }
@@ -80,7 +125,31 @@ document.querySelectorAll("button[data-key]").forEach(button => {
     button.addEventListener(type, () => keys.delete(code));
   }
   button.addEventListener("click", event => {
-    if (event.detail === 0) pressed.add(code);
+    if (event.detail === 0) {
+      gameAudio.start();
+      pressed.add(code);
+    }
+  });
+});
+
+document.querySelector("#skip-level").addEventListener("click", () => {
+  keys.clear();
+  pressed.clear();
+  for (let i = 0; i < levelOptions.length; i++) {
+    const current = stage >= Number(levelOptions[i].dataset.stage)
+      && (i === levelOptions.length - 1 || stage < Number(levelOptions[i + 1].dataset.stage));
+    if (current) levelOptions[i].setAttribute("aria-current", "true");
+    else levelOptions[i].removeAttribute("aria-current");
+  }
+  levelPicker.showModal();
+});
+
+levelOptions.forEach(option => {
+  option.addEventListener("click", () => {
+    stage = Number(option.dataset.stage);
+    reset();
+    levelPicker.close();
+    announce(option.textContent.trim());
   });
 });
 
@@ -88,40 +157,46 @@ const clamp = (value, low, high) => Math.max(low, Math.min(value, high));
 const near = (a, b, x, y) => Math.abs(a.x - b.x) < x && Math.abs(a.y - b.y) < y;
 const blockCenter = {x: block.x + block.w / 2, y: block.y + block.h / 2};
 function hasFloor(x) {
-  if (shaft()) return x < 245;
-  const gap = cargo() ? fireGap() : pit;
-  return x < gap.x || x > gap.end;
+  if (lab()) return x < labGap.x || x > labGap.end;
+  if (hasRivet()) return true;
+  const opening = hatchery() ? nest().gap : pit;
+  return !opening || x < opening.x || x > opening.end;
 }
 
 function advance() {
   stage++;
+  gameAudio.play("door");
   reset();
-  announce("Cargo Lift. " + cargoNames[stage - 1]);
+  announce(lab() ? "Gravity Lab" : reactor() ? "Reactor Core" : stage === 5 ? "Command Deck. Rivet is with you." : commandDeck() ? "Command Deck. " + deckRoom() : "Alien Hatchery. " + nest().name);
 }
 
 function activateWheel() {
   if (used) return;
   used = true;
   wheel = {time: 0, pick: Math.floor(Math.random() * rewards.length)};
+  gameAudio.play("wheel");
   announce("Weapon wheel spinning");
 }
 
 function damageGuard(amount) {
   guard.hp = Math.max(0, guard.hp - amount);
   guard.hit = .15;
-  if (!guard.hp) announce("Guard defeated. Exit open.");
+  gameAudio.play(guard.hp ? "hit" : "door");
+  if (!guard.hp) announce(exitLocked() ? "Captain defeated. The ceiling switch still needs power." : "Guard defeated. Exit open.");
 }
 
 function hurt() {
   if (hero.flash > 0) return;
   hero.hp--;
+  gameAudio.play("hurt");
   hero.flash = .9;
   hero.vy = -hero.gravity * 310;
   hero.grounded = false;
-  if (!hero.hp) retry("Guard got you");
+  if (!hero.hp) retry(hatchery() ? "The aliens got you" : "Guard got you");
 }
 
 function retry(message) {
+  gameAudio.play("retry");
   mode = "retry";
   notice = message;
   hero.retry = .85;
@@ -132,12 +207,22 @@ function updateGuard(dt) {
   if (!guard.hp) return;
   guard.hit = Math.max(0, guard.hit - dt);
   guard.time -= dt;
+  if (guard.phase === "flip") {
+    const targetY = guard.gravity > 0 ? floor - 24 : ceiling + 24;
+    guard.y += clamp(targetY - guard.y, -540 * dt, 540 * dt);
+    if (guard.y === targetY) {
+      guard.phase = "patrol";
+      guard.gun = guard.gravity > 0;
+    }
+    return;
+  }
   const close = near(hero, guard, guard.gun ? 470 : 92, guard.gun ? 190 : 58);
   if (guard.phase === "patrol") {
     if (close) {
       guard.face = Math.sign(hero.x - guard.x) || guard.face;
       guard.phase = "windup";
-      guard.time = .55;
+      gameAudio.play("alien");
+      guard.time = guard.gun ? .72 : .55;
     } else {
       guard.x += guard.face * 76 * dt;
       if (guard.x < 690 || guard.x > 875) {
@@ -147,12 +232,15 @@ function updateGuard(dt) {
     }
   } else if (guard.phase === "windup" && guard.time <= 0) {
     guard.phase = "strike";
+    gameAudio.play(guard.gun ? "enemy" : "sword");
     guard.time = .19;
     if (guard.gun) {
       const dx = hero.x - guard.x;
       const dy = hero.y - guard.y;
-      const distance = Math.hypot(dx, dy) || 1;
-      hostile.push({x: guard.x, y: guard.y, vx: dx / distance * 445, vy: dy / distance * 445});
+      for (const spread of lab() ? [-.23, -.11, 0, .11, .23] : captainRoom() ? [-.16, 0, .16] : [0]) {
+        const angle = Math.atan2(dy, dx) + spread;
+        hostile.push({x: guard.x, y: guard.y, vx: Math.cos(angle) * 445, vy: Math.sin(angle) * 445});
+      }
     }
   } else if (guard.phase === "strike") {
     const tip = {x: guard.x + guard.face * 31, y: guard.y};
@@ -162,7 +250,61 @@ function updateGuard(dt) {
       guard.time = .62;
     }
   } else if (guard.phase === "recover" && guard.time <= 0) {
-    guard.phase = "patrol";
+    if (captainRoom()) {
+      guard.phase = "flip";
+      guard.gravity *= -1;
+    } else {
+      guard.phase = "patrol";
+    }
+  }
+}
+
+function updateRivet(dt) {
+  if (!rivet) return;
+  rivet.cooldown = Math.max(0, rivet.cooldown - dt);
+  rivet.flash = Math.max(0, rivet.flash - dt);
+  rivet.gravity = hero.gravity;
+  rivet.x += clamp(hero.x - hero.face * 43 - rivet.x, -350 * dt, 350 * dt);
+  rivet.y += clamp(hero.y + hero.gravity * 4 - rivet.y, -660 * dt, 660 * dt);
+  if (!pressed.has("KeyF")) return;
+  if (hasSwitch() && !switchHeld && hero.gravity < 0 && near(hero, ceilingSwitch, 70, 47)) {
+    switchHeld = true;
+    rivet.flash = .3;
+    gameAudio.play("door");
+    announce("Rivet activated the switch. The floor door is powered.");
+    return;
+  }
+  if (!guard.hp || rivet.cooldown || !near(rivet, guard, 225, 105)) return;
+  rivet.flash = .45;
+  gameAudio.play("rivet");
+  rivet.cooldown = 4;
+  guard.phase = "recover";
+  guard.time = 1.25;
+  announce("Rivet distracted the captain.");
+}
+
+function updateNest(dt) {
+  nestTime += dt;
+  eggs = eggs.filter(egg => {
+    if (egg.timer === null && near(hero, egg, 111, 86)) egg.timer = .65;
+    if (egg.timer === null) return true;
+    egg.timer -= dt;
+    if (egg.timer > 0) return true;
+    gameAudio.play("hatch");
+    aliens.push({x: egg.x, home: egg.x, y: floor - 14, hp: 1, flying: false});
+    return false;
+  });
+  for (const alien of aliens) {
+    if (!alien.hp) continue;
+    const direction = Math.sign(hero.x - alien.x);
+    if (alien.flying) {
+      alien.x = alien.home + Math.sin(nestTime * 2 + alien.home) * 74;
+      alien.y = ceiling + 35 + Math.sin(nestTime * 3 + alien.home) * 19;
+    } else {
+      const next = clamp(alien.x + direction * 108 * dt, 35, W - 35);
+      if (hasFloor(next)) alien.x = next;
+    }
+    if (near(hero, alien, 26, 29)) hurt();
   }
 }
 
@@ -173,7 +315,7 @@ function updateShots(dt) {
     shot.life -= dt;
     if (shot.life <= 0 || shot.y > H) return false;
     const wall = shot.x < 32 || shot.x > W - 32;
-    const surface = (!shaft() && shot.y < ceiling) || (shot.y > floor && hasFloor(shot.x));
+    const surface = shot.y < ceiling || (shot.y > floor && hasFloor(shot.x));
     if (wall || surface) {
       if (!shot.bounces) return false;
       shot.bounces--;
@@ -190,9 +332,17 @@ function updateShots(dt) {
       activateWheel();
       return false;
     }
-    if (guard.hp && near(shot, guard, 21, 25)) {
+    const size = shot.heavy ? 6 : 0;
+    const damage = shot.heavy ? 2 : 1;
+    const alien = aliens.find(target => target.hp && near(shot, target, 21 + size, 22 + size));
+    if (alien) {
+      alien.hp = Math.max(0, alien.hp - damage);
+      gameAudio.play("hit");
+      return false;
+    }
+    if (guard.hp && near(shot, guard, 21 + size, 25 + size)) {
       const front = Math.sign(shot.vx) === -guard.face;
-      if (!(front && guard.phase === "windup" && !guard.gun)) damageGuard(1);
+      if (!(front && guard.phase === "windup" && !guard.gun)) damageGuard(damage);
       return false;
     }
     return true;
@@ -200,6 +350,7 @@ function updateShots(dt) {
 }
 
 function update(dt) {
+  if (menuOpen()) return;
   clock += dt;
   if (pressed.has("KeyR")) {
     if (mode === "won") stage = 0;
@@ -218,6 +369,7 @@ function update(dt) {
     if (wheel.time >= 2.3) {
       reward = rewards[wheel.pick];
       remaining = 20;
+      gameAudio.play("equip");
       announce(reward.name + " equipped for 20 seconds");
       wheel = null;
     }
@@ -228,6 +380,7 @@ function update(dt) {
     remaining -= dt;
     if (remaining <= 0) {
       reward = null;
+      gameAudio.play("expire");
       announce("Standard weapons restored");
     }
   }
@@ -235,19 +388,13 @@ function update(dt) {
   const move = Number(keys.has("ArrowRight") || keys.has("KeyD") || pressed.has("ArrowRight"))
     - Number(keys.has("ArrowLeft") || keys.has("KeyA") || pressed.has("ArrowLeft"));
   if (move) hero.face = move;
-  const previousLiftY = lift.y;
-  if (shaft()) {
-    liftTime += dt;
-    lift.y = 460 - 215 * (.5 - .5 * Math.cos(liftTime * Math.PI / 3));
-    if (hero.grounded && hero.gravity > 0 && hero.x >= lift.x && hero.x <= lift.end
-        && Math.abs(hero.y + 20 - previousLiftY) < 1) {
-      hero.y += lift.y - previousLiftY;
-    }
-  }
   const oldY = hero.y;
+  const wasGrounded = hero.grounded;
   hero.x = clamp(hero.x + move * 268 * dt, 48, W - 48);
+  if (hasSwitch() && !switchHeld) hero.x = Math.min(hero.x, 936);
   if (pressed.has("KeyE")) {
     hero.gravity *= -1;
+    gameAudio.play("flip");
     hero.grounded = false;
     hero.vy = hero.gravity * 100;
     if (attempts === 1 && !hero.flipped) blink = .55;
@@ -255,12 +402,13 @@ function update(dt) {
   }
   if (pressed.has("Space") && hero.grounded) {
     hero.vy = -hero.gravity * 540;
+    gameAudio.play("jump");
     hero.grounded = false;
   }
   hero.vy = clamp(hero.vy + hero.gravity * 1390 * dt, -700, 700);
   hero.y += hero.vy * dt;
   hero.grounded = false;
-  if (!shaft() && hero.y <= ceiling + 20) {
+  if (hero.y <= ceiling + 20) {
     hero.y = ceiling + 20;
     hero.vy = Math.max(0, hero.vy);
     hero.grounded = hero.gravity < 0;
@@ -270,31 +418,7 @@ function update(dt) {
     hero.vy = Math.min(0, hero.vy);
     hero.grounded = hero.gravity > 0;
   }
-  if (shaft()) {
-    const surfaces = [lift, catwalk, {x: 780, end: W, y: 322, h: 24}];
-    for (const surface of surfaces) {
-      if (hero.x < surface.x || hero.x > surface.end) continue;
-      const top = surface.y - 20;
-      const underside = surface.y + surface.h + 20;
-      if (hero.vy >= 0 && oldY <= top + .01 && hero.y >= top) {
-        hero.y = top;
-        hero.vy = 0;
-        hero.grounded = hero.gravity > 0;
-      } else if (hero.vy <= 0 && oldY >= underside - .01 && hero.y <= underside) {
-        hero.y = underside;
-        hero.vy = 0;
-        hero.grounded = hero.gravity < 0;
-      }
-    }
-  }
-  if (cargo() && !hasFloor(hero.x) && hero.y + 20 > floor - 12) {
-    retry("Watch the fire");
-    return;
-  }
-  if (shaft() && hero.y < 76) {
-    retry("Catch the underside of the catwalk");
-    return;
-  }
+  if (hero.grounded && !wasGrounded) gameAudio.play("land");
   if (hero.y > H + 22) {
     retry("Watch the pit");
     return;
@@ -309,34 +433,55 @@ function update(dt) {
   hero.fire = Math.max(0, hero.fire - dt);
   hero.swing = Math.max(0, hero.swing - dt);
   if ((keys.has("KeyJ") || pressed.has("KeyJ")) && !hero.fire) {
-    hero.fire = .25;
-    const ricochet = reward === rewards[1];
-    const spread = reward === rewards[0] ? [-.23, 0, .23] : [0];
+    const heavy = reward === pulseCannon;
+    const rapid = reward === rapidBlaster;
+    const ricochet = reward === ricochetBlaster;
+    hero.fire = heavy ? .58 : rapid ? .095 : .25;
+    hero.muzzleUntil = clock + .065;
+    gameAudio.play(heavy ? "pulse" : rapid ? "rapid" : "fire");
+    const spread = reward === scatterBlaster ? [-.23, 0, .23] : [0];
+    const speed = heavy ? 470 : rapid ? 850 : 695;
+    const color = heavy || rapid || ricochet ? reward.color : "#ffc369";
     for (const angle of spread) {
-      shots.push({x: hero.x + hero.face * 19, y: hero.y, vx: hero.face * 695, vy: 695 * angle, life: cargo() && !ricochet ? .65 : 2.1, bounces: Number(ricochet), color: ricochet ? "#7be0ff" : "#ffc369"});
+      shots.push({x: hero.x + hero.face * 19, y: hero.y, vx: hero.face * speed, vy: speed * angle,
+        life: 2.1, bounces: Number(ricochet), color, heavy});
     }
   }
   if (pressed.has("KeyK") && !hero.swing) {
     hero.swing = .26;
-    const plasma = reward === rewards[2];
+    const plasma = reward === plasmaBlade;
+    const shock = reward === shockBlade;
+    gameAudio.play(shock ? "shock" : "sword");
     const reach = plasma ? 94 : 57;
     const tip = {x: hero.x + hero.face * reach / 2, y: hero.y};
     if (hasWeaponBlock() && !used && near(tip, blockCenter, reach / 2 + 24, 44)) {
       activateWheel();
       return;
     }
+    for (const alien of aliens) {
+      if (alien.hp && near(tip, alien, reach / 2 + 16, 48)) alien.hp = Math.max(0, alien.hp - (plasma ? 2 : 1));
+    }
     if (guard.hp && near(tip, guard, reach / 2 + 16, 48)) {
       const blocking = guard.phase === "windup" && !guard.gun && guard.face === -hero.face;
       if (plasma || !blocking) {
         damageGuard(plasma ? 2 : 1);
         guard.phase = "recover";
-        guard.time = .34;
+        guard.time = shock ? 1.3 : .34;
       }
     }
   }
   updateShots(dt);
   if (wheel) return;
+  updateRivet(dt);
+  if (reactor()) {
+    reactorTime += dt;
+    const {surface, active} = reactorBeam();
+    if (active && Math.abs(hero.y - surface) < 28
+        && beamZones.some(zone => hero.x > zone.x && hero.x < zone.end)) hurt();
+  }
+  if (mode !== "play") return;
   updateGuard(dt);
+  if (hatchery() && mode === "play") updateNest(dt);
   hostile = hostile.filter(shot => {
     shot.x += shot.vx * dt;
     shot.y += shot.vy * dt;
@@ -346,27 +491,27 @@ function update(dt) {
     }
     return shot.x > 32 && shot.x < W - 32 && shot.y > ceiling && shot.y < floor;
   });
-  const exitY = shaft() ? 302 : 445;
-  if (mode !== "play" || guard.hp || hero.x <= 990 || Math.abs(hero.y - exitY) >= 44) return;
-  if (stage < 3) {
+  if (mode !== "play" || exitLocked() || hero.x <= 990 || Math.abs(hero.y - (floor - 20)) >= 44) return;
+  if (stage < 8) {
     advance();
   } else {
     mode = "won";
-    announce("Cargo Lift cleared");
+    gameAudio.play("clear");
+    announce("Gravity Lab cleared");
   }
 }
 
-function box(x, y, w, h, color) {
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, w, h);
+function box(x, y, w, h, color, surface = ctx) {
+  surface.fillStyle = color;
+  surface.fillRect(x, y, w, h);
 }
 
-function shape(points, color) {
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
-  ctx.closePath();
-  ctx.fill();
+function shape(points, color, surface = ctx) {
+  surface.fillStyle = color;
+  surface.beginPath();
+  points.forEach(([x, y], i) => i ? surface.lineTo(x, y) : surface.moveTo(x, y));
+  surface.closePath();
+  surface.fill();
 }
 
 function label(value, x, y, size = 18, color = "#f8e6ca", align = "left") {
@@ -376,11 +521,11 @@ function label(value, x, y, size = 18, color = "#f8e6ca", align = "left") {
   ctx.fillText(value, x, y);
 }
 
-function disc(x, y, radius, color) {
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fill();
+function disc(x, y, radius, color, surface = ctx) {
+  surface.fillStyle = color;
+  surface.beginPath();
+  surface.arc(x, y, radius, 0, Math.PI * 2);
+  surface.fill();
 }
 
 function trophy(x, y, color, style) {
@@ -465,55 +610,276 @@ function drawRoom() {
   }
 }
 
-function drawCargo() {
-  const steel = ctx.createLinearGradient(0, 83, 0, H);
-  steel.addColorStop(0, "#253c48");
-  steel.addColorStop(1, "#101621");
-  box(0, 0, W, H, steel);
-  for (let x = 45; x < W; x += 124) {
-    box(x, 87, 9, 390, "#13242f");
-    box(x + 9, 87, 2, 390, "#405662");
-    for (let y = 137; y < 440; y += 84) box(x + 3, y, 4, 4, "#73818a");
+function drawNest() {
+  const cavern = ctx.createLinearGradient(0, 90, 0, H);
+  cavern.addColorStop(0, "#2c2845");
+  cavern.addColorStop(1, "#0d1b28");
+  box(0, 0, W, H, cavern);
+  for (let x = 55; x < W; x += 96) {
+    shape([[x - 32, 95], [x + 34, 95], [x + 17, 185], [x - 13, 245]], "#3a3452");
+    disc(x, 202 + 34 * Math.sin(x), 7, "#695179");
+    shape([[x - 35, floor], [x + 48, floor], [x + 18, 358], [x - 18, 400]], "#27354a");
   }
   box(0, 0, W, 83, "#17151e");
-  if (shaft()) {
-    box(244, 110, 5, 350, "#59717b");
-    box(405, 110, 5, 350, "#59717b");
-    beam(0, floor, 245, H - floor);
-    beam(lift.x, lift.y, lift.end - lift.x, lift.h);
-    box(lift.x, lift.y, lift.end - lift.x, 4, "#ffca66");
-    beam(catwalk.x, catwalk.y, catwalk.end - catwalk.x, catwalk.h);
-    box(catwalk.x, catwalk.y + catwalk.h - 4, catwalk.end - catwalk.x, 4, "#78dce4");
-    beam(780, 322, W - 780, 25);
-    label("LIFT", 327, lift.y + 34, 14, "#ffca66", "center");
-  } else {
-    const gap = fireGap();
-    beam(0, 83, W, 22);
-    box(32, 101, W - 64, 4, "#60939b");
-    beam(0, floor, gap.x, H - floor);
+  beam(0, 83, W, 22);
+  box(32, 101, W - 64, 4, "#81b4ad");
+  const gap = nest().gap;
+  beam(0, floor, gap ? gap.x : W, H - floor);
+  if (gap) {
+    box(gap.x, floor, gap.end - gap.x, H - floor, "#0c101b");
     beam(gap.end, floor, W - gap.end, H - floor);
-    for (let x = gap.x; x < gap.end; x += 12) {
-      const height = 17 + 10 * Math.sin(clock * 9 + x);
-      shape([[x, H],[x, floor + 15],[x + 6, floor - height],[Math.min(x + 13, gap.end), H]], "#ec733e");
-      shape([[x + 2, H],[x + 7, floor - height / 2],[Math.min(x + 11, gap.end), H]], "#ffbf69");
+  }
+  for (const egg of eggs) {
+    const x = egg.x + (egg.timer === null ? 0 : Math.sin(clock * 56) * 3);
+    shape([[x - 21, floor], [x - 19, floor - 21], [x - 9, floor - 39], [x + 8, floor - 43],
+      [x + 20, floor - 22], [x + 23, floor]], egg.timer === null ? "#8174a4" : "#ea9c91");
+    box(x - 6, floor - 20, 11, 4, "#dbb6ef");
+  }
+  for (const alien of aliens) {
+    if (alien.hp) drawNestAlien(alien);
+  }
+  if (hasWeaponBlock() && !used) {
+    box(block.x, block.y, block.w, block.h, "#efaa55");
+    box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
+    label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
+  }
+  box(970, 354, 74, 111, "#524063");
+  box(980, 365, 54, 100, "#171b2d");
+  const color = exitLocked() ? "#ff897b" : "#8eead9";
+  box(985, 377, 44, 4, color);
+  label("NEXT", 1007, 350, 15, color, "center");
+}
+
+function drawNestAlien(alien) {
+  ctx.save();
+  ctx.translate(alien.x, alien.y);
+  if (alien.flying) {
+    const flap = Math.sin(clock * 19 + alien.x);
+    shape([[-8,5],[2,4],[8,18],[4 + flap * 5,27],[-2,24],[1,18]], "#734d9e");
+    shape([[1,15],[5,18],[4 + flap * 5,25],[2,22]], "#c9a3f3");
+    for (const side of [-1, 1]) {
+      ctx.save();
+      ctx.scale(side, 1);
+      ctx.rotate(flap * .44);
+      shape([[5, 1], [16, -8], [38, -12], [28, 2], [22, 0], [15, 11]], "#493056");
+      shape([[13, 0], [18, -5], [32, -9], [25, -1], [20, -1], [15, 7]], "#bb7de1");
+      shape([[18, -4], [30, -8], [20, 0]], "#f4abdc");
+      shape([[18,-7],[28,-14],[38,-12],[30,-9]], "#70499d");
+      shape([[27,-11],[35,-12],[30,-9]], "#dfc7ff");
+      ctx.restore();
     }
-    if (hasWeaponBlock() && !used) {
-      box(block.x, block.y, block.w, block.h, "#efaa55");
-      box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
-      label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
+    shape([[-14,-5],[-8,-14],[9,-14],[15,-3],[10,10],[0,16],[-10,10]], "#623c83");
+    shape([[-11,-7],[-6,-13],[8,-13],[12,-7],[4,-2],[-7,-2]], "#c78ce7");
+    shape([[-10,-3],[-3,1],[-5,6],[-10,3]], "#b8ffed");
+    shape([[3,1],[10,-3],[10,3],[5,6]], "#b8ffed");
+    box(-2, 8, 4, 3, "#81ecd2");
+    disc(0, -8, 3 + flap * .6, "#ffb9e9");
+    disc(0, -8, 1.4, "#fff0fb");
+  } else {
+    const stride = Math.sin(clock * 18 + alien.x);
+    for (const side of [-1, 1]) {
+      ctx.save();
+      ctx.scale(side, 1);
+      shape([[4,2],[12,-2],[22,6 + stride * side],[22,13],[17,9],[10,6]], "#b4638a");
+      shape([[8,5],[15,5],[18,12 - stride * side],[13,12],[8,9]], "#e791a5");
+      shape([[11,-1],[21,-5 + stride * side],[23,0],[19,4],[18,0],[14,4]], "#f4b391");
+      ctx.restore();
+    }
+    shape([[-15,6],[-13,-5],[-6,-12],[8,-12],[15,-4],[16,8],[4,11],[-8,10]], "#503465");
+    shape([[-13,-5],[-5,-12],[8,-12],[13,-6],[5,-3],[-5,-2]], "#e69b7e");
+    shape([[-12,-1],[-3,2],[-5,6],[-11,4]], "#ffdf94");
+    shape([[3,2],[12,-1],[11,4],[5,6]], "#ffdf94");
+    box(-3, 8, 6, 2, "#ee7183");
+    shape([[-9,-8],[-5,-13],[7,-13],[11,-8],[5,-6],[-3,-6]], "#f3ab91");
+    box(-2, -11, 4, 3, "#ffe0a4");
+  }
+  ctx.restore();
+}
+
+function reactorBeam() {
+  const elapsed = reactorTime % 2.6;
+  const surface = Math.floor(reactorTime / 2.6) % 2 === 0 ? floor - 20 : ceiling + 20;
+  return {surface, active: elapsed >= 1.25 && elapsed < 2.15, warning: elapsed >= .55 && elapsed < 1.25};
+}
+
+function drawDeck() {
+  box(0, 0, W, H, lab() ? "#202339" : reactor() ? "#352432" : "#151c2b");
+  for (let x = 85; x < W; x += 198) {
+    box(x, 170, 146, 146, "#384452");
+    box(x + 6, 176, 134, 134, "#101426");
+    for (let i = 0; i < 9; i++) {
+      disc(x + 12 + (i * 37) % 121, 182 + (i * 53 + x) % 117, i % 3 === 0 ? 2 : 1, "#a3b7d3");
     }
   }
-  const doorFloor = shaft() ? 322 : floor;
-  box(970, doorFloor - 111, 74, 111, "#354950");
-  box(980, doorFloor - 100, 54, 100, "#19262e");
-  box(985, doorFloor - 88, 44, 4, guard.hp ? "#ff897b" : "#8eead9");
-  label(stage === 3 ? "EXIT" : "NEXT", 1007, doorFloor - 115, 15, guard.hp ? "#ff897b" : "#8eead9", "center");
+  box(0, 0, W, 83, "#151624");
+  beam(0, 83, W, 22);
+  box(32, 101, W - 64, 4, "#769ac1");
+  if (lab()) {
+    beam(0, floor, labGap.x, H - floor);
+    beam(labGap.end, floor, W - labGap.end, H - floor);
+    box(labGap.x, floor, labGap.end - labGap.x, H - floor, "#090d17");
+  } else {
+    beam(0, floor, W, H - floor);
+  }
+  if (hasSwitch()) {
+    box(ceilingSwitch.x - 22, ceiling, 44, 9, switchHeld ? "#9affe2" : "#edca7e");
+    label("SWITCH", ceilingSwitch.x, 162, 14, "#f8dfab", "center");
+  }
+  if (hasWeaponBlock() && !used) {
+    box(block.x, block.y, block.w, block.h, "#efaa55");
+    box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
+    label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
+  }
+  if (reactor()) {
+    const {surface, active, warning} = reactorBeam();
+    for (const zone of beamZones) {
+      box(zone.x, surface - 19, zone.end - zone.x, 7, active ? "#ff6575" : warning ? "#f6c56b" : "#476375");
+      if (active) box(zone.x, surface - 16, zone.end - zone.x, 2, "#fff2af");
+    }
+  }
+  box(961, 352, 82, 113, "#354555");
+  box(970, 361, 64, 104, exitLocked() ? "#47303d" : "#203b4b");
+  const color = exitLocked() ? "#ff897b" : "#8eead9";
+  box(977, 373, 50, 4, color);
+  label(lab() ? "EXIT" : captainRoom() ? "NEXT" : "BRIDGE", 1002, 345, 15, color, "center");
+}
+
+function drawRivet() {
+  const light = rivet.cooldown > 0 ? "#ffc781" : "#82f7ee";
+  const hover = Math.sin(clock * 12) * 1.5;
+  ctx.save();
+  ctx.translate(rivet.x, rivet.y);
+  ctx.scale(1, rivet.gravity);
+  if (rivet.flash > 0) {
+    const radius = 16 + 47 * (1 - rivet.flash / .45);
+    ctx.save();
+    ctx.globalAlpha = rivet.flash / .45;
+    ctx.strokeStyle = "#fff1a6";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, -3, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    for (let i = 0; i < 6; i++) {
+      const angle = i * Math.PI / 3;
+      disc(Math.cos(angle) * (radius + 4), Math.sin(angle) * (radius + 4) - 3, 2, "#fff1a6");
+    }
+    ctx.restore();
+  }
+  ctx.translate(0, hover);
+  for (const side of [-1, 1]) {
+    ctx.save();
+    ctx.scale(side, 1);
+    shape([[8,4],[15,4],[18,9],[15,14],[9,14],[8,11]], "#31374f");
+    shape([[10,5],[15,6],[16,9],[10,9]], "#9596ce");
+    box(10, 11, 6, 2, "#72d8db");
+    shape([[10,14],[15,14],[12,18 + hover]], "#4e99aa");
+    ctx.restore();
+  }
+  shape([[-17,-5],[-10,-13],[10,-13],[17,-5],[14,7],[8,11],[-8,11],[-14,7]], "#2e3553");
+  shape([[-14,-5],[-9,-11],[9,-11],[14,-5],[11,5],[7,8],[-7,8],[-11,5]], "#a0b3db");
+  shape([[-11,-5],[-7,-8],[7,-8],[11,-5],[9,3],[-9,3]], "#1c2a43");
+  const scan = Math.sin(clock * 4) * 4;
+  box(-7, -4, 14, 4, "#42677b");
+  box(scan - 2, -5, 5, 5, light);
+  box(scan - 1, -5, 3, 1, "#f0fffb");
+  box(-3, 6, 6, 2, "#576894");
+  shape([[-7,-12],[-8,-17],[-6,-20],[-4,-18],[-4,-13]], "#adb6df");
+  disc(-6, -19, 2.3, light);
+  ctx.restore();
 }
 
 function blade(length, color) {
   box(12, -3, 11, 6, "#a67b66");
   box(22, -8, 4, 16, "#fff0d1");
   shape([[26,-5],[length - 9,-5],[length,0],[length - 9,5],[26,5]], color);
+}
+
+function paintHeroBody(surface, style, gravity, stride, time) {
+  const palette = heroes[style];
+  const polygon = (points, color) => shape(points, color, surface);
+  const tile = (x, y, w, h, color) => box(x, y, w, h, color, surface);
+  const dot = (x, y, radius, color) => disc(x, y, radius, color, surface);
+  const bootGlow = gravity < 0 ? palette.bright : palette.light;
+  for (const [x, step] of [[-12, stride], [5, -stride]]) {
+    surface.save();
+    surface.translate(x, step);
+    polygon([[-4,8],[5,8],[7,15],[11,17],[11,20],[-5,20]], "#26374d");
+    polygon([[-3,10],[4,10],[6,15],[-4,15]], palette.armor);
+    tile(-5, 17, 16, 3, bootGlow);
+    tile(-1, 17, 8, 1, "#e2fffc");
+    surface.restore();
+  }
+
+  polygon([[-15,-9],[-21,-5],[-22,7],[-17,11],[-12,8],[-10,-5]], "#27374a");
+  tile(-20, -3, 3, 9, "#6ea1b0");
+  polygon([[-14,-5],[-7,-9],[12,-7],[17,1],[11,12],[-12,12]], "#2c3447");
+  polygon([[-12,-5],[-5,-8],[12,-6],[15,-1],[9,8],[-10,8]], palette.armor);
+  polygon([[-10,-4],[-4,-6],[10,-4],[6,2],[-7,2]], palette.trim);
+  polygon([[-7,3],[0,1],[7,3],[3,7],[-4,7]], "#33586b");
+  tile(-3, 3, 6, 2, bootGlow);
+
+  polygon([[-19,-13],[-15,-21],[-3,-24],[10,-22],[19,-16],[17,-5],[10,-2],[-12,-3]], "#322a37");
+  polygon([[-17,-14],[-13,-20],[-2,-23],[10,-21],[17,-16],[14,-6],[8,-4],[-11,-5]], palette.helmet);
+  polygon([[-12,-19],[-2,-23],[10,-21],[14,-18],[2,-18],[-7,-16]], palette.crest);
+  polygon([[-8,-16],[4,-17],[17,-16],[16,-9],[8,-6],[-6,-8]], "#23374b");
+  polygon([[-3,-14],[5,-15],[15,-14],[14,-11],[7,-9],[-2,-10]], bootGlow);
+  tile(8, -14, 5, 1, "#e2fffc");
+  dot(-12, -11, 3, "#874c42");
+  dot(-12, -11, 1.4, palette.light);
+
+  const flicker = Math.sin(time * 25);
+  if (style === "volt") {
+    polygon([[-18,-13],[-23,-24],[-10,-19],[-9,-13]], palette.crest);
+    polygon([[10,-20],[22,-28],[19,-16],[13,-10]], palette.helmet);
+    polygon([[-5,-27],[0,-36],[4,-35],[1,-46 + flicker * 3],[10,-38],[6,-29],[2,-31]], "#f2ff83");
+    dot(-9, -34, 1.6, palette.light);
+  } else if (style === "nova") {
+    polygon([[-20,-11],[-21,-22],[-14,-29],[-9,-22],[-13,-10]], palette.helmet);
+    polygon([[10,-23],[18,-27],[18,-18],[15,-13]], palette.crest);
+    surface.strokeStyle = "#db8ff8";
+    surface.lineWidth = 2;
+    surface.beginPath();
+    surface.ellipse(1, -32 + flicker, 13, 4, -.13, 0, Math.PI * 2);
+    surface.stroke();
+    dot(Math.sin(time * 7) * 9, -42, 2, palette.light);
+  } else if (style === "frost") {
+    polygon([[-16,-19],[-18,-34],[-12,-31],[-8,-24],[-4,-42],[2,-35],[7,-24],[14,-32],[18,-21]], "#89c9f4");
+    polygon([[-8,-24],[-4,-42],[2,-35],[1,-24]], "#efffff");
+    polygon([[9,-24],[14,-32],[16,-26],[13,-22]], "#c9f4ff");
+    const drift = Math.sin(time * 7) * 2;
+    polygon([[11,-42 + drift],[13,-45 + drift],[15,-42 + drift],[13,-39 + drift]], "#b8f7ff");
+    dot(-14, -40 - drift, 1.5, "#d6f8ff");
+  } else if (style === "mantis") {
+    polygon([[-18,-16],[-19,-29],[-13,-39],[-10,-38],[-15,-28],[-13,-18]], "#419785");
+    polygon([[7,-21],[10,-31],[17,-42],[20,-40],[14,-28],[13,-19]], "#419785");
+    dot(-12, -38, 2.1, palette.light);
+    dot(18, -41, 2.3, palette.light);
+    surface.strokeStyle = "#bef4a380";
+    surface.lineWidth = 1;
+    surface.beginPath();
+    surface.arc(18, -41, 4 + 3 * (flicker + 1), Math.PI * 1.1, Math.PI * 1.9);
+    surface.stroke();
+    polygon([[-21,-8],[-15,-12],[-14,-5],[-20,0]], "#9fe0af");
+  } else if (style === "wraith") {
+    polygon([[-17,-14],[-23,-25],[-21,-42],[-15,-31],[-9,-23],[-12,-15]], "#872f54");
+    polygon([[10,-21],[19,-29],[22,-39],[25,-29],[18,-17]], "#872f54");
+    polygon([[-22,-26],[-21,-42],[-18,-31],[-13,-23],[-17,-23]], "#ff7482");
+    polygon([[19,-29],[22,-39],[23,-31],[19,-23]], "#ff7482");
+    polygon([[-12,-6],[-2,-10],[10,-7],[6,0],[-7,0]], "#292437");
+    dot(2, -32 - flicker * 2, 1.4, "#ff7083");
+  } else {
+    const lean = stride ? -4 : 0;
+    polygon([[-11,-26],[-14,-33],[-10,-41],[-7,-36],[-3 + lean,-49 - flicker * 4],
+      [3,-39],[8,-43 + flicker * 3],[11,-31],[7,-26]], "#ff593a");
+    polygon([[-7,-27],[-9,-33],[-5,-37],[-2,-34],[lean + 1,-43 - flicker * 3],
+      [5,-36],[7,-30],[4,-27]], "#ffab42");
+    polygon([[-4,-28],[-3,-32],[0,-36],[3,-32],[3,-28]], "#fff2a5");
+    const ember = (time * 1.8) % 1;
+    surface.globalAlpha = 1 - ember;
+    dot(-4 + lean - ember * 5, -46 - ember * 12, 1.4, "#ffc260");
+    surface.globalAlpha = 1;
+
+  }
 }
 
 function drawHero() {
@@ -523,20 +889,31 @@ function drawHero() {
   ctx.scale(hero.face, hero.gravity);
   const stride = hero.grounded && (keys.has("ArrowLeft") || keys.has("ArrowRight") || keys.has("KeyA") || keys.has("KeyD"))
     ? Math.sin(clock * 22) * 3 : 0;
-  box(-13, 11 + stride, 10, 9, "#78dce4");
-  box(4, 11 - stride, 10, 9, "#78dce4");
-  box(-14, -5, 28, 19, "#e4a05c");
-  box(-16, -20, 30, 20, "#ffe39b");
-  box(-9, -16, 24, 11, "#263143");
-  box(4, -14, 8, 7, "#a6f9f4");
-  box(-19, 0, 6, 11, "#9d625b");
-  box(8, 2, 13, 7, "#8ba6b5");
+  paintHeroBody(ctx, heroStyle, hero.gravity, stride, clock);
+
   if (hero.swing > 0) {
     ctx.rotate((hero.swing / .26 - .5) * -1.4);
-    blade(reward === rewards[2] ? 94 : 57, reward === rewards[2] ? "#e3a8ff" : "#94f4ed");
+    const specialBlade = reward === plasmaBlade || reward === shockBlade;
+    const bladeColor = specialBlade ? reward.color : "#94f4ed";
+    const reach = reward === plasmaBlade ? 94 : 57;
+    ctx.globalAlpha = .23 * hero.swing / .26;
+    shape([[22,-4],[reach * .65,-19],[reach,-9],[reach,1],[reach * .6,-7]], bladeColor);
+    ctx.globalAlpha = 1;
+    blade(reach, bladeColor);
+  } else {
+    const firing = clock < hero.muzzleUntil;
+    if (firing) ctx.translate(-3, 0);
+    shape([[9,-1],[15,-3],[27,-3],[29,1],[27,5],[17,5],[14,9],[10,8]], "#3e506a");
+    box(16, -2, 10, 2, "#a8c8d1");
+    box(24, 1, 5, 3, "#65dee7");
+    if (firing) {
+      shape([[28,-1],[35,-4],[34,-1],[43,1],[34,3],[36,6],[28,4]], "#fff3bc");
+    }
   }
   ctx.restore();
-  shape([[hero.x - 5, hero.y - hero.gravity * 32], [hero.x + 5, hero.y - hero.gravity * 32], [hero.x, hero.y - hero.gravity * 25]], "#81e4ec");
+  const indicatorX = hero.x - hero.face * 24;
+  shape([[indicatorX - 4, hero.y - hero.gravity * 31], [indicatorX + 4, hero.y - hero.gravity * 31],
+    [indicatorX, hero.y - hero.gravity * 25]], "#81e4ec");
 }
 
 function drawGuard() {
@@ -552,33 +929,84 @@ function drawGuard() {
     ctx.stroke();
     ctx.restore();
   }
+  const captain = captainRoom();
+  const accent = lab() ? "#aeedfb" : reactor() ? "#ffd184" : captain ? "#eab3ff" : "#ff937e";
+  const armor = guard.hit > 0 ? "#ffe5a5" : captain ? "#62677f" : "#a55759";
+  const stride = guard.phase === "patrol" ? Math.sin(clock * 13) * 3 : 0;
   ctx.save();
   ctx.translate(guard.x, guard.y);
-  ctx.scale(guard.face, 1);
-  box(-17, 13, 13, 11, "#68533e");
-  box(4, 13, 14, 11, "#68533e");
-  shape([[-23,-6],[20,-6],[16,16],[-17,16]], guard.hit > 0 ? "#ffe5a5" : "#ad585e");
-  shape([[-18,-20],[-29,-29],[-6,-26],[14,-26],[25,-31],[20,-12],[12,0],[-11,0]], "#9dac6e");
-  box(1, -18, 15, 4, "#211e25");
-  box(9, -18, 5, 4, "#ffd36e");
+  ctx.scale(guard.face, guard.gravity || 1);
+  if (captain) {
+    shape([[-13,-16],[-25,-8],[-31,16 + stride],[-18,23],[-9,16]], "#483257");
+    shape([[-18,-13],[-22,-8],[-26,17 + stride],[-22,18]], accent);
+  }
+  shape([[-17,10],[-6,10],[-5,24 - stride],[-22,24 - stride],[-20,18 - stride]], "#272734");
+  shape([[4,10],[16,10],[17,18 + stride],[21,24 + stride],[3,24 + stride]], "#353749");
+  box(-18, 20 - stride, 10, 2, armor);
+  box(7, 20 + stride, 11, 2, armor);
+  shape([[-26,-11],[19,-11],[24,-1],[16,16],[-17,16],[-23,6]], "#252735");
+  shape([[-23,-9],[-12,-13],[-3,-6],[-11,0],[-22,-1]], armor);
+  shape([[7,-6],[21,-10],[22,-2],[14,3],[4,1]], armor);
+  shape([[-12,1],[-2,-3],[13,2],[11,13],[-9,13]], armor);
+  shape([[-8,2],[-1,0],[8,3],[6,6],[-2,5]], accent);
+  box(-10, 10, 20, 2, "#302536");
+
+  if (captain) {
+    if (lab()) {
+      shape([[-20,-19],[-27,-29],[-26,-40],[-15,-32],[-8,-34],[7,-34],[16,-28],[24,-39],[26,-28],[19,-15],[10,-4],[-10,-5]], "#303348");
+      shape([[-23,-35],[-15,-29],[-11,-28],[-17,-24],[-22,-27]], accent);
+      shape([[16,-28],[23,-36],[23,-29],[18,-23]], accent);
+    } else if (reactor()) {
+      shape([[-21,-20],[-24,-31],[-13,-28],[-11,-40],[-3,-28],[4,-38],[11,-28],[19,-33],[20,-16],[11,-4],[-9,-5]], "#493547");
+      shape([[-20,-28],[-13,-25],[-10,-37],[-5,-26],[4,-35],[11,-24],[17,-29],[15,-21],[-14,-21]], accent);
+    } else {
+      shape([[-20,-21],[-24,-33],[-14,-29],[-7,-35],[1,-29],[9,-35],[20,-34],[18,-16],[11,-4],[-9,-5]], "#303348");
+      shape([[-20,-24],[-22,-31],[-13,-27],[-7,-32],[1,-26],[17,-30],[17,-23],[4,-19]], accent);
+    }
+    disc(-3, 4, 4, "#28263c");
+    disc(-3, 4, 2 + .5 * Math.sin(clock * 9), accent);
+  } else {
+    shape([[-20,-19],[-29,-30],[-15,-27],[-5,-29],[11,-28],[27,-30],[20,-18],[12,-6],[-10,-5]], "#523c41");
+    shape([[-23,-25],[-28,-30],[-15,-27],[-12,-22]], "#e2a871");
+    shape([[15,-24],[26,-30],[22,-22],[16,-20]], "#e2a871");
+    shape([[-24,-10],[-31,-5],[-24,1],[-17,-5]], "#473341");
+    shape([[-28,-6],[-23,-8],[-20,-6],[-24,-2]], accent);
+  }
+  shape([[-17,-20],[-6,-24],[15,-20],[16,-12],[9,-7],[-8,-9]], captain ? "#343c50" : "#858b63");
+  shape([[-12,-18],[-1,-17],[14,-19],[12,-13],[1,-11],[-10,-13]], "#1c2330");
+  shape([[-7,-16],[-2,-15],[-1,-12],[-6,-13]], accent);
+  shape([[2,-15],[12,-17],[10,-13],[3,-12]], accent);
+
   if (guard.phase === "windup" && !guard.gun) ctx.rotate(-1.25);
   if (guard.phase === "recover") ctx.rotate(.6);
   if (guard.gun) {
-    box(13, -3, 27, 12, "#75939c");
-    box(35, 0, 12, 5, "#ffa577");
+    if (guard.phase === "strike") ctx.translate(-5, 0);
+    shape([[14,-4],[22,-9],[42,-9],[49,-3],[46,5],[29,5],[24,12],[17,12]], "#414e69");
+    box(24, -7, 21, 3, accent);
+    box(34, -1, 16, 4, "#b8c4dd");
+    if (guard.phase === "strike") {
+      shape([[48,-6],[58,-9],[55,-3],[69,0],[54,3],[57,8],[47,5]], "#ffedbd");
+    }
   } else {
-    blade(guard.phase === "strike" ? 76 : 48, "#ff897b");
+    blade(guard.phase === "strike" ? 76 : 48, accent);
+    if (guard.phase === "strike") {
+      shape([[26,-7],[46,-23],[69,-18],[82,-5],[66,-11],[47,-11]], "#ffb9a755");
+    }
   }
   ctx.restore();
-  if (guard.phase === "windup") label("!", guard.x, guard.y - 41, 25, "#ffc369", "center");
-  for (let i = 0; i < (cargo() ? 4 : 3); i++) box(guard.x - 20 + i * 14, guard.y - 35, 11, 3, i < guard.hp ? "#ff897b" : "#614751");
+  const direction = guard.gravity || 1;
+  if (guard.phase === "windup") label("!", guard.x, guard.y - direction * 52, 25, "#ffc369", "center");
+  const health = lab() ? 10 : captainRoom() ? 8 : 3;
+  for (let i = 0; i < health; i++) {
+    box(guard.x - health * 7 + i * 14, guard.y - direction * 41, 11, 3, i < guard.hp ? "#ff897b" : "#614751");
+  }
 }
 
 function drawWheel() {
   box(0, 0, W, H, "#11101be6");
   const size = 124;
   const centerY = 279;
-  const section = Math.PI * 2 / 3;
+  const section = Math.PI * 2 / rewards.length;
   const progress = Math.min(1, wheel.time / 2.05);
   const rest = -Math.PI / 2 - (wheel.pick + .5) * section;
   const angle = rest - 5 * Math.PI * 2 * Math.pow(1 - progress, 3);
@@ -600,17 +1028,25 @@ function drawWheel() {
   });
   disc(W / 2, centerY, 14, "#33283b");
   shape([[W/2-12, centerY-size-13],[W/2+12, centerY-size-13],[W/2, centerY-size+13]], "#fff6dd");
-  label(progress === 1 ? rewards[wheel.pick].name : "Spinning…", W / 2, 451, 26, "#fff2d6", "center");
+  const chosen = rewards[wheel.pick];
+  label(progress === 1 ? chosen.name : "Spinning…", W / 2, 451, 26, "#fff2d6", "center");
+  if (progress === 1) label(chosen.description, W / 2, 483, 17, chosen.color, "center");
 }
 
 function draw() {
-  if (cargo()) drawCargo();
+  if (hasRivet()) drawDeck();
+  else if (hatchery()) drawNest();
   else drawRoom();
   drawGuard();
   for (const shot of shots) {
     ctx.shadowBlur = 10;
     ctx.shadowColor = shot.color;
-    box(shot.x - 7, shot.y - 2, 14, 4, shot.color);
+    if (shot.heavy) {
+      disc(shot.x, shot.y, 7, shot.color);
+      disc(shot.x, shot.y, 3, "#fff2d6");
+    } else {
+      box(shot.x - 7, shot.y - 2, 14, 4, shot.color);
+    }
   }
   ctx.shadowBlur = 0;
   for (const shot of hostile) {
@@ -618,35 +1054,142 @@ function draw() {
     disc(shot.x, shot.y, 2, "#fff1be");
   }
   drawHero();
+  if (rivet) drawRivet();
   label("INTEGRITY", 35, 38, 15, "#d0ad95");
   for (let i = 0; i < 3; i++) box(35 + i * 27, 48, 23, 9, i < hero.hp ? "#84e1e2" : "#493743");
   if (reward) {
     label(reward.icon + "  " + reward.name + "   " + Math.ceil(remaining) + "s", W - 35, 41, 23, reward.color, "right");
     box(W - 235, 51, 200, 5, "#40303c");
     box(W - 235, 51, 10 * remaining, 5, reward.color);
-  } else if (!shaft() && stage !== 3) {
+  } else if (hasWeaponBlock()) {
     label(used ? "STANDARD WEAPONS" : "WEAPON BLOCK READY", W - 35, 46, 16, "#ffc474", "right");
   }
   if (wheel) drawWheel();
   if (mode !== "play") {
     box(0, 0, W, H, "#110f18d9");
-    label(mode === "won" ? "CARGO LIFT CLEARED" : notice, W / 2, 253, 43, "#ffe2ae", "center");
+    label(mode === "won" ? "GRAVITY LAB CLEARED" : notice, W / 2, 253, 43, "#ffe2ae", "center");
     label(mode === "won" ? "Press R or tap Restart to play again" : "Retrying this section…", W / 2, 296, 22, "#aadfe1", "center");
   }
   const message = mode === "won" ? "Game cleared"
-    : shaft() ? "Ride the lift, then flip onto the catwalk"
+    : hasSwitch() && !switchHeld ? "Flip to the ceiling switch and press F"
+    : stage === 5 ? "Floor door open"
+    : captainRoom() && guard.hp ? (rivet.cooldown ? "Rivet recharging · " + Math.ceil(rivet.cooldown) + "s" : "Press F near the captain to distract it")
+    : stage === 4 && exitLocked() ? "Aliens left at the gate: " + (aliensLeft() + Number(guard.hp > 0))
     : guard.hp ? "Defeat the guard to open the exit" : "Exit open";
-  const roomName = cargo() ? "Level 2 · Cargo Lift / " + cargoNames[stage - 1] : "The Trophy Hall";
+  const roomName = lab() ? "Level 5 · Gravity Lab"
+    : reactor() ? "Level 4 · Reactor Core"
+    : commandDeck() ? "Level 3 · Command Deck / " + deckRoom()
+    : hatchery() ? "Level 2 · Alien Hatchery / " + nest().name
+    : "The Trophy Hall";
   if (heading.textContent !== roomName) heading.textContent = roomName;
   if (status.textContent !== message) status.textContent = message;
 }
 
+function drawIntro(time) {
+  const surface = introArt.getContext("2d");
+  const {width, height} = introArt;
+  const sky = surface.createLinearGradient(0, 0, 0, height);
+  sky.addColorStop(0, "#14152c");
+  sky.addColorStop(1, "#5b344b");
+  box(0, 0, width, height, sky, surface);
+  for (let i = 0; i < 46; i++) {
+    const x = (i * 131 + 33) % width;
+    const y = (i * 47 + 13) % 174;
+    disc(x, y, .8 + .6 * Math.sin(i + time * 3), "#d4c2e6", surface);
+  }
+  disc(575, 71, 42, "#92586c", surface);
+  disc(575, 71, 38, "#b3717c", surface);
+  for (let x = 0; x < width; x += 36) {
+    const y = 178 + 28 * Math.sin(x * .06) + 14 * Math.cos(x * .13);
+    box(x, y, 30, height - y, "#211d31", surface);
+    box(x + 4, y + 8, 21, 3, "#75516b", surface);
+  }
+
+  const motion = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : time;
+  const shipX = 545 - Math.min(motion / 3.7, 1) * 253;
+  const shipY = 79 + Math.sin(motion * 2.5) * 6;
+  surface.save();
+  surface.translate(shipX, shipY);
+  if (time >= 1.8) {
+    shape([[-16,10],[18,10],[69,158],[-65,158]], "#b78df034", surface);
+    shape([[-8,12],[8,12],[29,158],[-28,158]], "#eebcff28", surface);
+  }
+  shape([[-72,0],[-39,-15],[-18,-15],[-7,-28],[16,-28],[32,-15],[49,-12],[72,2],[50,13],[-44,13]], "#2b2039", surface);
+  shape([[-62,0],[-23,-14],[26,-14],[63,2],[37,8],[-35,8]], "#8c568d", surface);
+  shape([[-18,-16],[-4,-25],[13,-25],[24,-16]], "#c5a5e4", surface);
+  for (const x of [-36, -18, 0, 18, 36]) box(x - 3, 4, 6, 3, "#ffbc8b", surface);
+  surface.restore();
+
+  box(0, 233, width, 27, "#1a1726", surface);
+  box(0, 232, width, 3, "#ad725d", surface);
+  surface.save();
+  surface.translate(140 + Math.min(motion, 4) * 7, 204);
+  surface.scale(1.4, 1.4);
+  paintHeroBody(surface, "pyre", 1, 0, motion);
+  surface.restore();
+}
+
+function finishIntro() {
+  if (!intro.open) return;
+  intro.close();
+  showHeroPicker();
+}
+
+introPlay.addEventListener("click", () => {
+  if (introStarted !== null) return;
+  gameAudio.start();
+  introStarted = performance.now();
+  introSkip.focus();
+  introPlay.hidden = true;
+});
+introSkip.addEventListener("click", finishIntro);
+intro.addEventListener("cancel", event => {
+  event.preventDefault();
+  finishIntro();
+});
+
+function updateIntro(now) {
+  if (!intro.open || introStarted === null) return;
+  const time = (now - introStarted) / 1000;
+  if (time >= 5.4) {
+    finishIntro();
+    return;
+  }
+  const caption = time < 1.8 ? "An alien ship is closing in on the scrapyard."
+    : time < 3.6 ? "The aliens have taken the yard."
+    : "Boots charged. Time to take it back.";
+  if (introCaption.textContent !== caption) introCaption.textContent = caption;
+  drawIntro(time);
+}
+
+function showHeroPicker() {
+  heroPicker.querySelectorAll("[data-hero]").forEach(option => {
+    const preview = option.querySelector("canvas");
+    const surface = preview.getContext("2d");
+    surface.save();
+    surface.translate(preview.width / 2, preview.height * .65);
+    surface.scale(1.65, 1.65);
+    paintHeroBody(surface, option.dataset.hero, 1, 0, .2);
+    surface.restore();
+    option.addEventListener("click", () => {
+      heroStyle = option.dataset.hero;
+      gameAudio.start();
+      heroPicker.close();
+      announce(option.querySelector("span").textContent + " selected");
+    });
+  });
+  heroPicker.showModal();
+}
+
 reset();
+drawIntro(0);
+intro.showModal();
 let last = performance.now();
 let accumulated = 0;
 const step = 1 / 120;
 
 function frame(now) {
+  updateIntro(now);
   accumulated += Math.min(.05, (now - last) / 1000);
   last = now;
   while (accumulated >= step) {
@@ -655,6 +1198,7 @@ function frame(now) {
     accumulated -= step;
   }
   draw();
+  gameAudio.music(lab() ? 4 : reactor() ? 3 : commandDeck() ? 2 : hatchery() ? 1 : 0, mode === "play" && !wheel && !menuOpen());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

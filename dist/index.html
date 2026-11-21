@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Flip gravity and fight your way through five levels, from the Trophy Hall to the Gravity Lab in a 2D action platformer.">
+<title>Magnet Boots</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#100f14;color:#f6e8ce;font:16px system-ui,sans-serif}main{width:min(1200px,96vw);padding:22px 0}header,footer{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}header{margin-bottom:14px}h1{margin:0;font-size:clamp(26px,5vw,50px);font-weight:950;letter-spacing:-.055em;line-height:1;text-transform:uppercase}header span{color:#ffc474;font-weight:750;letter-spacing:.15em;text-transform:uppercase;font-size:14px}.screen{position:relative;border:1px solid #665042;box-shadow:0 12px 50px #0008;background:#201722}canvas{display:block;width:100%;height:auto}footer{margin-top:15px;justify-content:flex-start}button{color:inherit;background:#261f28;border:1px solid #615044;border-radius:5px;padding:8px 12px;font:inherit;cursor:pointer;touch-action:none;user-select:none}button:hover,button:focus-visible{border-color:#ffd080}kbd{color:#ffd080;margin-right:5px}#status{margin-left:auto;color:#a0e9ee;font-weight:700}#announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+
+.display-controls{display:flex;gap:6px;flex:none}
+.display-controls button{min-height:44px}
+:is(#level-picker,#hero-picker,#intro){
+  width:min(25rem,calc(100% - 24px));max-height:calc(100% - 20px);
+  background:#201925;color:#f6e8ce;border:1px solid #8a6a57;
+  border-radius:8px;padding:14px;overflow:auto;
+}
+:is(#level-picker,#hero-picker,#intro)::backdrop{background:#100f14bb}
+:is(#level-picker,#hero-picker,#intro) h2{margin:0;font-size:20px}
+.level-picker-heading{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.level-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.level-list button{min-height:44px;text-align:left;font-size:14px}
+.level-list button[aria-current="true"]{border-color:#a0e9ee}
+#intro{width:min(44rem,calc(100% - 24px));padding:0}
+#intro-art{display:block;width:100%;height:auto;background:#171322}
+.intro-copy{padding:12px 14px}
+#intro h2{font-size:clamp(22px,5vw,40px);text-transform:uppercase;letter-spacing:-.045em;line-height:1}
+#intro-caption{min-height:2.8em;margin:8px 0 10px;font-size:16px;color:#ebcbb4}
+.intro-actions{display:flex;gap:8px;flex-wrap:wrap}
+.intro-actions button{min-height:44px}
+#intro-play{background:#ffd080;color:#241823;font-weight:800}
+@media (max-height:420px) and (orientation:landscape){
+  #intro-art{max-height:44vh;object-fit:contain}
+}
+#hero-picker{width:min(43rem,calc(100% - 24px))}
+.hero-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px}
+.hero-list button{display:grid;gap:6px;justify-items:center;min-width:0;padding:8px 5px 12px;font-weight:800;touch-action:pan-y}
+.hero-list .hero-preview{width:100%;height:auto;max-width:136px;aspect-ratio:1;background:#171421;border-radius:4px}
+.hero-list small{font-size:13px;font-weight:400;color:#e0c8b5}
+@media (max-height:380px){
+  .hero-list .hero-preview{max-width:96px}
+}
+header h1{flex:1 0 auto}
+main:is(:fullscreen,.game-expanded main){
+  display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  width:100%;height:100vh;height:100dvh;max-width:none;
+  padding:max(6px,env(safe-area-inset-top)) max(8px,env(safe-area-inset-right))
+    max(6px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));
+  background:#100f14;
+}
+.game-expanded{overflow:hidden}
+.game-expanded main{position:fixed;inset:0;z-index:1}
+main:is(:fullscreen,.game-expanded main) .screen{min-width:0;min-height:0}
+main:is(:fullscreen,.game-expanded main) canvas{height:100%;object-fit:contain}
+main:is(:fullscreen,.game-expanded main) header{margin-bottom:6px}
+main:is(:fullscreen,.game-expanded main) footer{margin-top:6px}
+@media (orientation:landscape) and (max-height:600px){
+  main{
+    display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+    width:100%;height:100vh;height:100dvh;
+    padding:max(6px,env(safe-area-inset-top)) max(8px,env(safe-area-inset-right))
+      max(6px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));
+  }
+  header,footer{gap:4px 8px}
+  header{margin-bottom:5px}
+  header h1{font-size:clamp(18px,4vw,25px)}
+  header span{font-size:12px;letter-spacing:.06em}
+  .screen{min-width:0;min-height:0}
+  canvas{height:100%;object-fit:contain}
+  footer{margin-top:5px}
+  button{min-height:44px;padding:5px 8px;font-size:14px}
+  footer kbd{display:none}
+  #status{margin-left:0;font-size:14px}
+}
+</style>
+<script defer src="display.js"></script>
+<script defer src="audio.js"></script>
+<script defer src="game.js"></script>
+</head>
+<body>
+<main>
+<header><h1>Magnet Boots</h1><span id="room-name">The Trophy Hall</span><div class="display-controls"><button id="skip-level" type="button" aria-haspopup="dialog">Skip level</button><button id="fullscreen" type="button" aria-pressed="false">Full screen</button></div></header>
+<div class="screen"><canvas id="game" width="1080" height="540" aria-label="Trophy Hall platform game"></canvas><span id="announcement" aria-live="polite"></span></div>
+<footer aria-label="Game controls">
+<button data-key="ArrowLeft"><kbd>←</kbd> Left</button>
+<button data-key="ArrowRight"><kbd>→</kbd> Right</button>
+<button data-key="Space"><kbd>Space</kbd> Jump</button>
+<button data-key="KeyE"><kbd>E</kbd> Flip</button>
+<button data-key="KeyJ"><kbd>J</kbd> Blaster</button>
+<button data-key="KeyK"><kbd>K</kbd> Sword</button>
+<button id="rivet-control" data-key="KeyF" hidden><kbd>F</kbd> Rivet</button>
+<button data-key="KeyR"><kbd>R</kbd> Restart</button>
+<button id="sound" type="button">Enable sound</button>
+<span id="status">Defeat the guard to open the exit</span>
+</footer>
+<dialog id="intro" aria-labelledby="intro-title">
+  <canvas id="intro-art" width="700" height="260" aria-hidden="true"></canvas>
+  <div class="intro-copy">
+    <h2 id="intro-title">Magnet Boots</h2>
+    <p id="intro-caption" aria-live="polite">An alien ship is closing in on the scrapyard.</p>
+    <div class="intro-actions">
+      <button id="intro-play" type="button" autofocus>Play intro</button>
+      <button id="intro-skip" type="button">Skip intro</button>
+    </div>
+  </div>
+</dialog>
+<dialog id="hero-picker" aria-labelledby="hero-picker-title">
+  <h2 id="hero-picker-title">Choose your hero</h2>
+  <div class="hero-list">
+    <button type="button" data-hero="pyre" autofocus><canvas class="hero-preview" width="132" height="132" aria-hidden="true"></canvas><span>Pyre</span><small>Gold armor and orange flames</small></button>
+    <button type="button" data-hero="volt"><canvas class="hero-preview" width="132" height="132" aria-hidden="true"></canvas><span>Volt</span><small>Cobalt armor and electric sparks</small></button>
+    <button type="button" data-hero="nova"><canvas class="hero-preview" width="132" height="132" aria-hidden="true"></canvas><span>Nova</span><small>Violet armor and a plasma halo</small></button>
+    <button type="button" data-hero="frost"><canvas class="hero-preview" width="132" height="132" aria-hidden="true"></canvas><span>Frost</span><small>White armor and an ice crown</small></button>
+    <button type="button" data-hero="mantis"><canvas class="hero-preview" width="132" height="132" aria-hidden="true"></canvas><span>Mantis</span><small>Jade armor and radar antennae</small></button>
+    <button type="button" data-hero="wraith"><canvas class="hero-preview" width="132" height="132" aria-hidden="true"></canvas><span>Wraith</span><small>Dark armor and crimson horns</small></button>
+  </div>
+</dialog>
+<dialog id="level-picker" aria-labelledby="level-picker-title">
+  <div class="level-picker-heading">
+    <h2 id="level-picker-title">Choose a level</h2>
+    <form method="dialog"><button autofocus type="submit">Cancel</button></form>
+  </div>
+  <div class="level-list">
+    <button type="button" data-stage="0">1 · Trophy Hall</button>
+    <button type="button" data-stage="1">2 · Alien Hatchery</button>
+    <button type="button" data-stage="5">3 · Command Deck</button>
+    <button type="button" data-stage="7">4 · Reactor Core</button>
+    <button type="button" data-stage="8">5 · Gravity Lab</button>
+  </div>
+</dialog>
+</main>
+</body>
+</html>
