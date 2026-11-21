@@ -1,7 +1,12 @@
 "use strict";
 
 const canvas = document.querySelector("#game");
-const ctx = canvas.getContext("2d");
+let ctx = canvas.getContext("2d");
+const backdrop = document.createElement("canvas");
+backdrop.width = canvas.width;
+backdrop.height = canvas.height;
+const backdropContext = backdrop.getContext("2d");
+let paintedStage, paintedBlink;
 const heading = document.querySelector("#room-name");
 const rivetControl = document.querySelector("#rivet-control");
 const status = document.querySelector("#status");
@@ -41,12 +46,14 @@ const keys = new Set();
 const pressed = new Set();
 let hero, guard, shots, wheel, reward, remaining, used, mode, attempts;
 let stage = 0;
-let hostile;
+let hostile, explosions;
 const hatchery = () => stage >= 1 && stage <= 4;
 const commandDeck = () => stage === 5 || stage === 6;
 const reactor = () => stage === 7;
 const lab = () => stage === 8;
-const captainRoom = () => stage >= 6;
+const finalStage = 9;
+const stasisVault = () => stage === finalStage;
+const captainRoom = () => stage >= 6 && !stasisVault();
 const hasRivet = () => stage >= 5;
 const hasSwitch = () => stage === 5 || lab();
 const labGap = {x: 372, end: 650};
@@ -59,13 +66,18 @@ const nests = [
   {name: "Incubation Row", eggs: [310, 515, 730], flyers: [385], guard: 0},
   {name: "Brood Bridge", eggs: [250, 760], flyers: [370, 625], guard: 0, gap: {x: 360, end: 640}},
   {name: "Feeding Chamber", eggs: [350, 560, 680], flyers: [560, 820], guard: 3},
-  {name: "Nest Gate", eggs: [], flyers: [335, 555, 780], guard: 4, gap: {x: 410, end: 675}}
+  {name: "Nest Gate", eggs: [], flyers: [335, 555, 780], guard: 0, gap: {x: 410, end: 675}}
 ];
 const nest = () => nests[stage - 1];
+const nixRoom = () => stage === 4;
+const trophyBoss = {name: "Dash", health: 4, color: "#7bcaff"};
+const nestBoss = {name: "Nix", health: 6, color: "#82f3db"};
+const vaultBoss = {name: "Goliath", health: 10, color: "#d6aaff"};
+const roomBoss = () => stage === 0 ? trophyBoss : nixRoom() ? nestBoss : stasisVault() ? vaultBoss : null;
 let eggs, aliens, nestTime;
-const aliensLeft = () => aliens.filter(alien => alien.hp > 0).length;
+const aliensLeft = () => aliens.reduce((count, alien) => count + (alien.hp > 0), 0);
 const exitLocked = () => Boolean(guard.hp || (stage === 4 && aliensLeft()) || (hasSwitch() && !switchHeld));
-const hasWeaponBlock = () => stage === 0 || stage === 3 || captainRoom();
+const hasWeaponBlock = () => stage === 0 || stage === 3 || captainRoom() || stasisVault();
 let blink = 0;
 let clock = 0;
 let notice = "";
@@ -83,6 +95,12 @@ function reset() {
     guard.gravity = 1;
     guard.gun = captainRoom();
   }
+  const boss = roomBoss();
+  if (boss) {
+    guard.hp = boss.health;
+    guard.gun = true;
+  }
+  if (stasisVault()) guard.phase = "sleeping";
   rivet = hasRivet() ? {x: hero.x - 36, y: hero.y + 4, gravity: 1, cooldown: 0, flash: 0} : null;
   reactorTime = 0;
   switchHeld = false;
@@ -92,6 +110,7 @@ function reset() {
   nestTime = 0;
   hostile = [];
   shots = [];
+  explosions = [];
   wheel = reward = null;
   remaining = blink = 0;
   used = false;
@@ -167,7 +186,7 @@ function advance() {
   stage++;
   gameAudio.play("door");
   reset();
-  announce(lab() ? "Gravity Lab" : reactor() ? "Reactor Core" : stage === 5 ? "Command Deck. Rivet is with you." : commandDeck() ? "Command Deck. " + deckRoom() : "Alien Hatchery. " + nest().name);
+  announce(stasisVault() ? "Stasis Vault. Goliath is asleep." : lab() ? "Gravity Lab" : reactor() ? "Reactor Core" : stage === 5 ? "Command Deck. Rivet is with you." : commandDeck() ? "Command Deck. " + deckRoom() : "Alien Hatchery. " + nest().name);
 }
 
 function activateWheel() {
@@ -178,11 +197,43 @@ function activateWheel() {
   announce("Weapon wheel spinning");
 }
 
+const explosionDuration = .48;
+
+function explode(target, color) {
+  const sparks = Array.from({length: 18}, (_, index) => {
+    const angle = (index + Math.random()) * Math.PI / 9;
+    const speed = 65 + Math.random() * 155;
+    return {vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, size: 2 + Math.random() * 4};
+  });
+  explosions.push({x: target.x, y: target.y, color, started: clock, sparks});
+  gameAudio.play("explode");
+}
+
+function damageAlien(alien, amount) {
+  alien.hp = Math.max(0, alien.hp - amount);
+  if (!alien.hp) explode(alien, "#9ce879");
+}
+
 function damageGuard(amount) {
   guard.hp = Math.max(0, guard.hp - amount);
   guard.hit = .15;
+  if (guard.phase === "sleeping") {
+    guard.phase = "recover";
+    guard.time = .8;
+    guard.face = Math.sign(hero.x - guard.x) || guard.face;
+    gameAudio.play("alien");
+    announce("Goliath woke up!");
+  }
   gameAudio.play(guard.hp ? "hit" : "door");
-  if (!guard.hp) announce(exitLocked() ? "Captain defeated. The ceiling switch still needs power." : "Guard defeated. Exit open.");
+  if (!guard.hp) {
+    const boss = roomBoss();
+    explode(guard, boss?.color ?? "#ff9d56");
+    if (boss) {
+      announce(boss.name + " defeated!");
+      return;
+    }
+    announce(exitLocked() ? "Captain defeated. The ceiling switch still needs power." : "Guard defeated. Exit open.");
+  }
 }
 
 function hurt() {
@@ -204,7 +255,7 @@ function retry(message) {
 }
 
 function updateGuard(dt) {
-  if (!guard.hp) return;
+  if (!guard.hp || guard.phase === "sleeping") return;
   guard.hit = Math.max(0, guard.hit - dt);
   guard.time -= dt;
   if (guard.phase === "flip") {
@@ -237,7 +288,7 @@ function updateGuard(dt) {
     if (guard.gun) {
       const dx = hero.x - guard.x;
       const dy = hero.y - guard.y;
-      for (const spread of lab() ? [-.23, -.11, 0, .11, .23] : captainRoom() ? [-.16, 0, .16] : [0]) {
+      for (const spread of lab() ? [-.23, -.11, 0, .11, .23] : (captainRoom() || stasisVault()) ? [-.16, 0, .16] : [0]) {
         const angle = Math.atan2(dy, dx) + spread;
         hostile.push({x: guard.x, y: guard.y, vx: Math.cos(angle) * 445, vy: Math.sin(angle) * 445});
       }
@@ -274,18 +325,18 @@ function updateRivet(dt) {
     announce("Rivet activated the switch. The floor door is powered.");
     return;
   }
-  if (!guard.hp || rivet.cooldown || !near(rivet, guard, 225, 105)) return;
+  if (!guard.hp || guard.phase === "sleeping" || rivet.cooldown || !near(rivet, guard, 225, 105)) return;
   rivet.flash = .45;
   gameAudio.play("rivet");
   rivet.cooldown = 4;
   guard.phase = "recover";
   guard.time = 1.25;
-  announce("Rivet distracted the captain.");
+  announce(stasisVault() ? "Rivet distracted Goliath." : "Rivet distracted the captain.");
 }
 
 function updateNest(dt) {
   nestTime += dt;
-  eggs = eggs.filter(egg => {
+  if (eggs.length) eggs = eggs.filter(egg => {
     if (egg.timer === null && near(hero, egg, 111, 86)) egg.timer = .65;
     if (egg.timer === null) return true;
     egg.timer -= dt;
@@ -309,6 +360,7 @@ function updateNest(dt) {
 }
 
 function updateShots(dt) {
+  if (!shots.length) return;
   shots = shots.filter(shot => {
     shot.x += shot.vx * dt;
     shot.y += shot.vy * dt;
@@ -336,8 +388,8 @@ function updateShots(dt) {
     const damage = shot.heavy ? 2 : 1;
     const alien = aliens.find(target => target.hp && near(shot, target, 21 + size, 22 + size));
     if (alien) {
-      alien.hp = Math.max(0, alien.hp - damage);
-      gameAudio.play("hit");
+      damageAlien(alien, damage);
+      if (alien.hp) gameAudio.play("hit");
       return false;
     }
     if (guard.hp && near(shot, guard, 21 + size, 25 + size)) {
@@ -352,6 +404,7 @@ function updateShots(dt) {
 function update(dt) {
   if (menuOpen()) return;
   clock += dt;
+  while (explosions.length && clock - explosions[0].started >= explosionDuration) explosions.shift();
   if (pressed.has("KeyR")) {
     if (mode === "won") stage = 0;
     reset();
@@ -459,14 +512,19 @@ function update(dt) {
       return;
     }
     for (const alien of aliens) {
-      if (alien.hp && near(tip, alien, reach / 2 + 16, 48)) alien.hp = Math.max(0, alien.hp - (plasma ? 2 : 1));
+      if (alien.hp && near(tip, alien, reach / 2 + 16, 48)) damageAlien(alien, plasma ? 2 : 1);
     }
     if (guard.hp && near(tip, guard, reach / 2 + 16, 48)) {
       const blocking = guard.phase === "windup" && !guard.gun && guard.face === -hero.face;
-      if (plasma || !blocking) {
+      if (nixRoom()) {
+        announce("Nix’s armor deflects swords. Use your blaster.");
+      } else if (plasma || !blocking) {
+        const waking = guard.phase === "sleeping";
         damageGuard(plasma ? 2 : 1);
-        guard.phase = "recover";
-        guard.time = shock ? 1.3 : .34;
+        if (!waking) {
+          guard.phase = "recover";
+          guard.time = shock ? 1.3 : .34;
+        }
       }
     }
   }
@@ -482,7 +540,7 @@ function update(dt) {
   if (mode !== "play") return;
   updateGuard(dt);
   if (hatchery() && mode === "play") updateNest(dt);
-  hostile = hostile.filter(shot => {
+  if (hostile.length) hostile = hostile.filter(shot => {
     shot.x += shot.vx * dt;
     shot.y += shot.vy * dt;
     if (near(shot, hero, 15, 20)) {
@@ -492,12 +550,12 @@ function update(dt) {
     return shot.x > 32 && shot.x < W - 32 && shot.y > ceiling && shot.y < floor;
   });
   if (mode !== "play" || exitLocked() || hero.x <= 990 || Math.abs(hero.y - (floor - 20)) >= 44) return;
-  if (stage < 8) {
+  if (stage < finalStage) {
     advance();
   } else {
     mode = "won";
     gameAudio.play("clear");
-    announce("Gravity Lab cleared");
+    announce("Stasis Vault cleared");
   }
 }
 
@@ -558,7 +616,19 @@ function beam(x, y, w, height) {
   for (let i = x + 10; i < x + w - 5; i += 32) box(i, y + 16, 5, 4, "#815543");
 }
 
-function drawRoom() {
+function drawWeaponBlock(glowing = false) {
+  if (used || !hasWeaponBlock()) return;
+  if (glowing) {
+    ctx.shadowBlur = 18 + Math.sin(clock * 5) * 5;
+    ctx.shadowColor = "#ffb955";
+  }
+  box(block.x, block.y, block.w, block.h, "#efaa55");
+  if (glowing) ctx.shadowBlur = 0;
+  box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
+  label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
+}
+
+function paintRoomBackdrop() {
   const wall = ctx.createLinearGradient(0, ceiling, 0, floor);
   wall.addColorStop(0, "#382730");
   wall.addColorStop(.45, "#2b202b");
@@ -594,23 +664,19 @@ function drawRoom() {
       shape([[edge + i * 8,465],[edge + i * 8 + 5,465],[edge + i * 8 + 9,474],[edge + i * 8 + 4,474]], "#f3af52");
     }
   }
+}
+
+function drawRoom() {
   const doorColor = guard.hp ? "#f18a76" : "#8eead9";
   box(970, 354, 74, 111, "#5d4447");
   box(977, 361, 60, 104, "#151821");
   box(984, 370, 46, 95, guard.hp ? "#382934" : "#224343");
   box(985, 377, 44, 4, doorColor);
   label("EXIT", 1007, 350, 15, doorColor, "center");
-  if (!used) {
-    ctx.shadowBlur = 18 + Math.sin(clock * 5) * 5;
-    ctx.shadowColor = "#ffb955";
-    box(block.x, block.y, block.w, block.h, "#efaa55");
-    ctx.shadowBlur = 0;
-    box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
-    label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
-  }
+  drawWeaponBlock(true);
 }
 
-function drawNest() {
+function paintNestBackdrop() {
   const cavern = ctx.createLinearGradient(0, 90, 0, H);
   cavern.addColorStop(0, "#2c2845");
   cavern.addColorStop(1, "#0d1b28");
@@ -629,6 +695,9 @@ function drawNest() {
     box(gap.x, floor, gap.end - gap.x, H - floor, "#0c101b");
     beam(gap.end, floor, W - gap.end, H - floor);
   }
+}
+
+function drawNest() {
   for (const egg of eggs) {
     const x = egg.x + (egg.timer === null ? 0 : Math.sin(clock * 56) * 3);
     shape([[x - 21, floor], [x - 19, floor - 21], [x - 9, floor - 39], [x + 8, floor - 43],
@@ -638,11 +707,7 @@ function drawNest() {
   for (const alien of aliens) {
     if (alien.hp) drawNestAlien(alien);
   }
-  if (hasWeaponBlock() && !used) {
-    box(block.x, block.y, block.w, block.h, "#efaa55");
-    box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
-    label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
-  }
+  drawWeaponBlock();
   box(970, 354, 74, 111, "#524063");
   box(980, 365, 54, 100, "#171b2d");
   const color = exitLocked() ? "#ff897b" : "#8eead9";
@@ -702,8 +767,8 @@ function reactorBeam() {
   return {surface, active: elapsed >= 1.25 && elapsed < 2.15, warning: elapsed >= .55 && elapsed < 1.25};
 }
 
-function drawDeck() {
-  box(0, 0, W, H, lab() ? "#202339" : reactor() ? "#352432" : "#151c2b");
+function paintDeckBackdrop() {
+  box(0, 0, W, H, stasisVault() ? "#261d3b" : lab() ? "#202339" : reactor() ? "#352432" : "#151c2b");
   for (let x = 85; x < W; x += 198) {
     box(x, 170, 146, 146, "#384452");
     box(x + 6, 176, 134, 134, "#101426");
@@ -721,15 +786,17 @@ function drawDeck() {
   } else {
     beam(0, floor, W, H - floor);
   }
+}
+
+function drawDeck() {
+  if (stasisVault()) {
+    label("STASIS VAULT", W / 2, 146, 26, "#d6aaff", "center");
+  }
   if (hasSwitch()) {
     box(ceilingSwitch.x - 22, ceiling, 44, 9, switchHeld ? "#9affe2" : "#edca7e");
     label("SWITCH", ceilingSwitch.x, 162, 14, "#f8dfab", "center");
   }
-  if (hasWeaponBlock() && !used) {
-    box(block.x, block.y, block.w, block.h, "#efaa55");
-    box(block.x + 4, block.y + 4, block.w - 8, block.h - 8, "#412f38");
-    label("?", blockCenter.x, block.y + 37, 34, "#ffd584", "center");
-  }
+  drawWeaponBlock();
   if (reactor()) {
     const {surface, active, warning} = reactorBeam();
     for (const zone of beamZones) {
@@ -741,7 +808,7 @@ function drawDeck() {
   box(970, 361, 64, 104, exitLocked() ? "#47303d" : "#203b4b");
   const color = exitLocked() ? "#ff897b" : "#8eead9";
   box(977, 373, 50, 4, color);
-  label(lab() ? "EXIT" : captainRoom() ? "NEXT" : "BRIDGE", 1002, 345, 15, color, "center");
+  label(stasisVault() ? "EXIT" : captainRoom() ? "NEXT" : "BRIDGE", 1002, 345, 15, color, "center");
 }
 
 function drawRivet() {
@@ -916,6 +983,99 @@ function drawHero() {
     [indicatorX, hero.y - hero.gravity * 25]], "#81e4ec");
 }
 
+function drawRoomBoss(boss) {
+  const isDash = boss === trophyBoss;
+  const stride = guard.phase === "patrol" ? Math.round(Math.sin(clock * 15) * 3) : 0;
+  const jacket = guard.hit > 0 ? "#7e9eaf" : "#253241";
+  const face = guard.hit > 0 ? "#d7ffcd" : isDash ? "#85b6d7" : "#82bca5";
+  ctx.save();
+  ctx.translate(guard.x, guard.y);
+  ctx.scale(guard.face * (isDash ? 1.15 : 1), 1);
+  if (isDash) {
+    shape([[-20,-12],[-28,-5],[-38,19],[-23,15],[-13,22],[-6,6]], "#242950");
+    shape([[-24,-5],[-31,12],[-23,8]], "#565d9d");
+  }
+  box(-22, 13 - stride, 18, 8, "#212930");
+  box(4, 13 + stride, 20, 8, "#212930");
+  box(-20, 19 - stride, 17, 5, "#627481");
+  box(5, 19 + stride, 19, 5, "#627481");
+  shape([[-25,0],[-20,-10],[-11,-12],[12,-12],[21,-8],[25,4],[19,18],[-20,18]], jacket);
+  shape([[-17,-8],[-9,-12],[-2,1],[-11,9]], "#4c5b6b");
+  shape([[16,-8],[9,-12],[1,1],[11,9]], "#4c5b6b");
+  if (isDash) {
+    shape([[-27,-8],[-20,-14],[-11,-10],[-14,0],[-26,2]], "#465b86");
+    shape([[14,-10],[22,-13],[30,-6],[26,3],[17,0]], "#465b86");
+    box(-24, -8, 9, 2, "#f5cc78");
+    box(20, -8, 7, 2, "#f5cc78");
+    shape([[-5,2],[0,-3],[5,2],[0,7]], boss.color);
+  }
+  if (!isDash) box(-1, 5, 2, 13, "#73838c");
+  box(-17, 8, 4, 3, "#80f3db");
+
+  shape([[-20,-31],[-17,-43],[-9,-48],[7,-48],[17,-42],[21,-32],[18,-19],[10,-11],[-8,-11],[-17,-17]], face);
+  shape([[-20,-31],[-24,-40],[-13,-35],[-15,-26]], isDash ? "#7096ba" : "#69a18c");
+  shape([[18,-32],[25,-37],[22,-27],[17,-24]], isDash ? "#7096ba" : "#69a18c");
+  if (isDash) {
+    shape([[-20,-35],[-20,-43],[-15,-49],[-7,-54],[5,-54],[16,-50],[21,-43],[20,-34],[15,-40],[12,-34],[7,-41],[3,-35],[-2,-41],[-7,-36],[-11,-40],[-15,-36]], "#c9a262");
+    shape([[-16,-46],[-7,-51],[6,-52],[14,-47],[1,-49],[-9,-45]], "#f7d994");
+  } else {
+    shape([[-19,-34],[-20,-44],[-12,-49],[-7,-48],[-2,-51],[9,-51],[17,-47],[21,-40],[19,-34],[14,-42],[7,-44],[-7,-42],[-14,-39]], "#46352e");
+    shape([[-16,-44],[-8,-48],[7,-49],[14,-46],[3,-46],[-8,-43]], "#766050");
+    box(-18, -41, 3, 6, "#8c8275");
+    box(16, -42, 3, 6, "#8c8275");
+  }
+  box(-12, -33, 10, 2, "#514943");
+  box(5, -33, 11, 2, "#514943");
+  box(-11, -29, 8, 3, "#c9dfb7");
+  box(6, -29, 8, 3, "#c9dfb7");
+  box(-6, -29, 2, 3, "#377f85");
+  box(11, -29, 2, 3, "#377f85");
+  shape([[1,-29],[5,-23],[4,-21],[-2,-21]], "#659c86");
+  if (isDash) {
+    shape([[-8,-19],[-2,-17],[7,-17],[13,-20],[8,-14],[-2,-14]], "#38586b");
+    box(-1, -17, 8, 1, "#e8f2e2");
+  } else {
+    box(-4, -17, 12, 2, "#4c625c");
+  }
+  box(-15, -23, 2, 4, "#9affdd");
+  box(15, -23, 2, 4, "#9affdd");
+  box(11, -4, 25, 9, "#37294f");
+  box(17, -4, 17, 3, "#f6bf73");
+  if (guard.phase === "strike") box(36, -4, 9, 8, "#fff3ac");
+  ctx.restore();
+  const name = boss.name.toUpperCase();
+  if (isDash) box(guard.x - 38, guard.y - 81, 76, 28, "#161b32");
+  label(guard.phase === "windup" ? name + " !" : name, guard.x, guard.y - 66, 16, "#ffd28c", "center");
+  for (let i = 0; i < boss.health; i++) {
+    box(guard.x - boss.health * 5.5 + i * 11, guard.y - 57, 8, 3, i < guard.hp ? boss.color : "#614751");
+  }
+}
+
+function drawGoliath() {
+  const sleeping = guard.phase === "sleeping";
+  const bob = sleeping ? Math.sin(clock * 3) * 2 : 0;
+  ctx.save();
+  ctx.translate(guard.x, guard.y + (sleeping ? 9 : 0) + bob);
+  ctx.scale(guard.face, 1);
+  const armor = guard.hit ? "#f8dcff" : "#7461a1";
+  box(-36, 12, 27, sleeping ? 3 : 12, "#332848");
+  box(9, 12, 28, sleeping ? 3 : 12, "#332848");
+  shape([[-40,5],[-33,-25],[-20,-39],[20,-39],[34,-25],[42,6],[24,18],[-25,18]], armor);
+  shape([[-28,-21],[-18,-33],[18,-33],[28,-21],[20,5],[-19,5]], "#302542");
+  for (const x of [-14, 1, 16]) {
+    box(x - 3, -20, 7, sleeping ? 2 : 8, sleeping ? "#9d91b9" : "#f9b8ec");
+  }
+  box(-12, 9, 24, 4, "#ad8dd2");
+  box(29, -3, 17, 9, "#332848");
+  if (guard.phase === "strike") disc(49, 1, 5, "#ffbfe9");
+  ctx.restore();
+
+  label(sleeping ? "GOLIATH · Zzz" : "GOLIATH", guard.x, guard.y - 65, 17, vaultBoss.color, "center");
+  for (let i = 0; i < vaultBoss.health; i++) {
+    box(guard.x - 54 + i * 11, guard.y - 55, 8, 4, i < guard.hp ? vaultBoss.color : "#4c3b61");
+  }
+}
+
 function drawGuard() {
   if (!guard.hp) return;
   if (guard.gun && guard.phase === "windup") {
@@ -928,6 +1088,15 @@ function drawGuard() {
     ctx.lineTo(hero.x, hero.y);
     ctx.stroke();
     ctx.restore();
+  }
+  if (stasisVault()) {
+    drawGoliath();
+    return;
+  }
+  const boss = roomBoss();
+  if (boss) {
+    drawRoomBoss(boss);
+    return;
   }
   const captain = captainRoom();
   const accent = lab() ? "#aeedfb" : reactor() ? "#ffd184" : captain ? "#eab3ff" : "#ff937e";
@@ -1033,11 +1202,54 @@ function drawWheel() {
   if (progress === 1) label(chosen.description, W / 2, 483, 17, chosen.color, "center");
 }
 
+function drawExplosions() {
+  ctx.save();
+  for (const blast of explosions) {
+    const age = clock - blast.started;
+    const progress = age / explosionDuration;
+    ctx.globalAlpha = (1 - progress) ** 2;
+    ctx.strokeStyle = blast.color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(blast.x, blast.y, 9 + progress * 66, 0, Math.PI * 2);
+    ctx.stroke();
+    disc(blast.x, blast.y, 6 + progress * 18, "#fff2bf");
+    for (const spark of blast.sparks) {
+      disc(blast.x + spark.vx * age, blast.y + spark.vy * age, spark.size * (1 - progress), blast.color);
+    }
+  }
+  ctx.restore();
+}
+
+function drawBackdrop() {
+  const paint = hasRivet() ? paintDeckBackdrop : hatchery() ? paintNestBackdrop : paintRoomBackdrop;
+  if (!backdropContext) {
+    paint();
+    return;
+  }
+  const eyesClosed = stage === 0 && blink > 0;
+  if (paintedStage !== stage || paintedBlink !== eyesClosed) {
+    // The same drawing helpers paint the cached layer and the visible canvas.
+    const screenContext = ctx;
+    ctx = backdropContext;
+    try {
+      paint();
+    } finally {
+      ctx = screenContext;
+    }
+    paintedStage = stage;
+    paintedBlink = eyesClosed;
+  }
+  ctx.drawImage(backdrop, 0, 0);
+}
+
 function draw() {
+  drawBackdrop();
   if (hasRivet()) drawDeck();
   else if (hatchery()) drawNest();
   else drawRoom();
   drawGuard();
+  drawExplosions();
   for (const shot of shots) {
     ctx.shadowBlur = 10;
     ctx.shadowColor = shot.color;
@@ -1067,16 +1279,20 @@ function draw() {
   if (wheel) drawWheel();
   if (mode !== "play") {
     box(0, 0, W, H, "#110f18d9");
-    label(mode === "won" ? "GRAVITY LAB CLEARED" : notice, W / 2, 253, 43, "#ffe2ae", "center");
+    label(mode === "won" ? "STASIS VAULT CLEARED" : notice, W / 2, 253, 43, "#ffe2ae", "center");
     label(mode === "won" ? "Press R or tap Restart to play again" : "Retrying this section…", W / 2, 296, 22, "#aadfe1", "center");
   }
   const message = mode === "won" ? "Game cleared"
     : hasSwitch() && !switchHeld ? "Flip to the ceiling switch and press F"
     : stage === 5 ? "Floor door open"
+    : stasisVault() && guard.hp ? (guard.phase === "sleeping" ? "Hit Goliath to wake it" : "Defeat Goliath to open the exit")
     : captainRoom() && guard.hp ? (rivet.cooldown ? "Rivet recharging · " + Math.ceil(rivet.cooldown) + "s" : "Press F near the captain to distract it")
-    : stage === 4 && exitLocked() ? "Aliens left at the gate: " + (aliensLeft() + Number(guard.hp > 0))
+    : stage === 0 && guard.hp ? "Defeat Dash to open the exit"
+    : nixRoom() && guard.hp ? "Defeat Nix with your blaster (J)"
+    : nixRoom() && exitLocked() ? "Aliens left at the gate: " + aliensLeft()
     : guard.hp ? "Defeat the guard to open the exit" : "Exit open";
-  const roomName = lab() ? "Level 5 · Gravity Lab"
+  const roomName = stasisVault() ? "Level 6 · Stasis Vault"
+    : lab() ? "Level 5 · Gravity Lab"
     : reactor() ? "Level 4 · Reactor Core"
     : commandDeck() ? "Level 3 · Command Deck / " + deckRoom()
     : hatchery() ? "Level 2 · Alien Hatchery / " + nest().name
@@ -1187,6 +1403,7 @@ intro.showModal();
 let last = performance.now();
 let accumulated = 0;
 const step = 1 / 120;
+let menuWasOpen = false;
 
 function frame(now) {
   updateIntro(now);
@@ -1197,8 +1414,10 @@ function frame(now) {
     pressed.clear();
     accumulated -= step;
   }
-  draw();
-  gameAudio.music(lab() ? 4 : reactor() ? 3 : commandDeck() ? 2 : hatchery() ? 1 : 0, mode === "play" && !wheel && !menuOpen());
+  const menuIsOpen = menuOpen();
+  if (!menuIsOpen || !menuWasOpen) draw();
+  menuWasOpen = menuIsOpen;
+  gameAudio.music(lab() || stasisVault() ? 4 : reactor() ? 3 : commandDeck() ? 2 : hatchery() ? 1 : 0, mode === "play" && !wheel && !menuIsOpen);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -1,0 +1,10 @@
+{
+  "name": "magnet-boots",
+  "private": true,
+  "scripts": {
+    "build": "terser src/display.js src/audio.js src/game.js --compress --mangle --output dist/game.bundle.js"
+  },
+  "devDependencies": {
+    "terser": "5.51.4"
+  }
+}

@@ -34,6 +34,7 @@ const gameAudio = (() => {
     ],
     enemy: [[0, 360, 100, .19, "square", .05]],
     hit: [[0, 175, 82, .12, "triangle"]],
+    explode: [[0, 190, 38, .26, "triangle", .09], [0, 460, 65, .12, "sawtooth", .04]],
     hurt: [[0, 280, 78, .24, "sawtooth", .055]],
     retry: [[0, 214, 214, .14, "triangle"], [.13, 157, 112, .25, "triangle"]],
     wheel: [[0, 390, 530, .09, "triangle"], [.10, 510, 640, .09, "triangle"], [.20, 660, 800, .14, "triangle"]],
