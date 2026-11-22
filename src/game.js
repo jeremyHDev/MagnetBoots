@@ -46,21 +46,37 @@ const keys = new Set();
 const pressed = new Set();
 let hero, guard, shots, wheel, reward, remaining, used, mode, attempts;
 let stage = 0;
-let hostile, explosions;
+let hostile, explosions, alienCallIn;
 const hatchery = () => stage >= 1 && stage <= 4;
 const commandDeck = () => stage === 5 || stage === 6;
 const reactor = () => stage === 7;
 const lab = () => stage === 8;
-const finalStage = 9;
-const stasisVault = () => stage === finalStage;
-const captainRoom = () => stage >= 6 && !stasisVault();
+const stasisVault = () => stage === 9;
+const cargoChase = () => stage === 10;
+const trophyRevolt = () => stage === 11;
+const finalStage = 12;
+const rescueRoom = () => stage === finalStage;
+const captainRoom = () => stage >= 6 && stage <= 8;
 const hasRivet = () => stage >= 5;
 const hasSwitch = () => stage === 5 || lab();
 const labGap = {x: 372, end: 650};
+const cargoGaps = [{x: 300, end: 460}, {x: 550, end: 690}];
+const cargoAirlock = 884;
 const beamZones = [{x: 285, end: 430}, {x: 526, end: 655}];
 let reactorTime;
 const ceilingSwitch = {x: 605, y: ceiling + 22};
-let rivet, switchHeld;
+let rivet, switchHeld, rescueStep;
+const rescueGates = [370, 680];
+const bulkheadSwitch = {x: 245, y: ceiling + 20};
+const cageSwitch = {x: 470, y: floor - 20};
+const airlockSwitch = {x: 835, y: ceiling + 20};
+const rescueInstructions = [
+  "Flip (E) to the ceiling bulkhead switch and press F",
+  "Drop to the floor cage release and press F",
+  "Rivet is opening the second gate",
+  "Meet Rivet at the ceiling airlock panel and press F",
+  "Head to the floor exit with Rivet"
+];
 const deckRoom = () => captainRoom() ? "Captain’s Bridge" : "Charging Bay";
 const nests = [
   {name: "Incubation Row", eggs: [310, 515, 730], flyers: [385], guard: 0},
@@ -73,14 +89,34 @@ const nixRoom = () => stage === 4;
 const trophyBoss = {name: "Dash", health: 4, color: "#7bcaff"};
 const nestBoss = {name: "Nix", health: 6, color: "#82f3db"};
 const vaultBoss = {name: "Goliath", health: 10, color: "#d6aaff"};
-const roomBoss = () => stage === 0 ? trophyBoss : nixRoom() ? nestBoss : stasisVault() ? vaultBoss : null;
+const cargoBoss = {name: "Cell Thief", health: 7, color: "#f8bf69"};
+const revoltTrophies = [
+  {name: "Iron Visage", health: 3, color: "#795771", style: 1, x: 560, gun: false},
+  {name: "Orb Maw", health: 4, color: "#627779", style: 2, x: 725, gun: true},
+  {name: "The Wink", health: 6, color: "#72795e", style: 0, x: 865, gun: true}
+];
+let revoltWave;
+const vaultBlackoutDuration = 1.25;
+const shockwaveDuration = .95;
+const shockwaveSpeed = 1150;
+const goliathSlamming = () => guard.phase === "slamWindup" || guard.phase === "slamWave";
+const roomBoss = () => stage === 0 ? trophyBoss : nixRoom() ? nestBoss : stasisVault() ? vaultBoss
+  : cargoChase() ? cargoBoss : trophyRevolt() ? revoltTrophies[revoltWave] : null;
+const guardFlips = () => captainRoom() || (trophyRevolt() && revoltWave === revoltTrophies.length - 1);
+const cargoRunning = () => cargoChase() && guard.phase === "escape";
 let eggs, aliens, nestTime;
 const aliensLeft = () => aliens.reduce((count, alien) => count + (alien.hp > 0), 0);
-const exitLocked = () => Boolean(guard.hp || (stage === 4 && aliensLeft()) || (hasSwitch() && !switchHeld));
-const hasWeaponBlock = () => stage === 0 || stage === 3 || captainRoom() || stasisVault();
+const exitLocked = () => Boolean(guard.hp || (stage === 4 && aliensLeft()) || (hasSwitch() && !switchHeld) || (rescueRoom() && rescueStep < 4));
+const hasWeaponBlock = () => stage === 0 || stage === 3 || captainRoom() || stasisVault() || trophyRevolt();
 let blink = 0;
 let clock = 0;
 let notice = "";
+
+function spawnTrophy() {
+  const trophy = revoltTrophies[revoltWave];
+  guard = {x: trophy.x, home: trophy.x, y: floor - 24, hp: trophy.health, gun: trophy.gun,
+    gravity: 1, face: -1, phase: "recover", time: .75, hit: 0};
+}
 
 function announce(message) {
   announcement.textContent = message;
@@ -95,15 +131,20 @@ function reset() {
     guard.gravity = 1;
     guard.gun = captainRoom();
   }
+  revoltWave = 0;
   const boss = roomBoss();
   if (boss) {
     guard.hp = boss.health;
     guard.gun = true;
   }
   if (stasisVault()) guard.phase = "sleeping";
+  if (cargoChase()) Object.assign(guard, {x: 214, y: floor - 30, face: 1, phase: "escape"});
+  if (trophyRevolt()) spawnTrophy();
   rivet = hasRivet() ? {x: hero.x - 36, y: hero.y + 4, gravity: 1, cooldown: 0, flash: 0} : null;
   reactorTime = 0;
   switchHeld = false;
+  rescueStep = 0;
+  if (rescueRoom()) Object.assign(rivet, {x: 532, y: floor - 27});
   rivetControl.hidden = !hasRivet();
   eggs = hatchery() ? nest().eggs.map(x => ({x, y: floor - 18, timer: null})) : [];
   aliens = hatchery() ? nest().flyers.map(x => ({x, home: x, y: ceiling + 31, hp: 2, flying: true})) : [];
@@ -111,6 +152,7 @@ function reset() {
   hostile = [];
   shots = [];
   explosions = [];
+  alienCallIn = 1.2;
   wheel = reward = null;
   remaining = blink = 0;
   used = false;
@@ -177,6 +219,7 @@ const near = (a, b, x, y) => Math.abs(a.x - b.x) < x && Math.abs(a.y - b.y) < y;
 const blockCenter = {x: block.x + block.w / 2, y: block.y + block.h / 2};
 function hasFloor(x) {
   if (lab()) return x < labGap.x || x > labGap.end;
+  if (cargoChase()) return cargoGaps.every(gap => x < gap.x || x > gap.end);
   if (hasRivet()) return true;
   const opening = hatchery() ? nest().gap : pit;
   return !opening || x < opening.x || x > opening.end;
@@ -186,7 +229,10 @@ function advance() {
   stage++;
   gameAudio.play("door");
   reset();
-  announce(stasisVault() ? "Stasis Vault. Goliath is asleep." : lab() ? "Gravity Lab" : reactor() ? "Reactor Core" : stage === 5 ? "Command Deck. Rivet is with you." : commandDeck() ? "Command Deck. " + deckRoom() : "Alien Hatchery. " + nest().name);
+  announce(rescueRoom() ? "Rivet’s Rescue. Open the first bulkhead from the ceiling."
+    : cargoChase() ? "Cargo Chase. Follow the stolen power cell."
+    : trophyRevolt() ? "Trophy Revolt. The trophies have broken loose."
+    : stasisVault() ? "Stasis Vault. Goliath is asleep." : lab() ? "Gravity Lab" : reactor() ? "Reactor Core" : stage === 5 ? "Command Deck. Rivet is with you." : commandDeck() ? "Command Deck. " + deckRoom() : "Alien Hatchery. " + nest().name);
 }
 
 function activateWheel() {
@@ -207,6 +253,7 @@ function explode(target, color) {
   });
   explosions.push({x: target.x, y: target.y, color, started: clock, sparks});
   gameAudio.play("explode");
+  gameAudio.play("alienDeath");
 }
 
 function damageAlien(alien, amount) {
@@ -215,19 +262,34 @@ function damageAlien(alien, amount) {
 }
 
 function damageGuard(amount) {
+  const previousHealth = guard.hp;
   guard.hp = Math.max(0, guard.hp - amount);
   guard.hit = .15;
   if (guard.phase === "sleeping") {
     guard.phase = "recover";
-    guard.time = .8;
+    guard.time = vaultBlackoutDuration;
+    guard.blackoutUntil = clock + vaultBlackoutDuration;
     guard.face = Math.sign(hero.x - guard.x) || guard.face;
     gameAudio.play("alien");
     announce("Goliath woke up!");
   }
   gameAudio.play(guard.hp ? "hit" : "door");
+  if (stasisVault() && previousHealth > vaultBoss.health / 2 && guard.hp && guard.hp <= vaultBoss.health / 2) {
+    guard.phase = "slamWindup";
+    guard.time = 1;
+    gameAudio.play("slamWarning");
+    announce("Goliath is about to slam. Flip to the ceiling!");
+  }
   if (!guard.hp) {
     const boss = roomBoss();
     explode(guard, boss?.color ?? "#ff9d56");
+    if (trophyRevolt() && revoltWave < revoltTrophies.length - 1) {
+      revoltWave++;
+      spawnTrophy();
+      hostile.length = 0;
+      announce("Next trophy: " + roomBoss().name);
+      return;
+    }
     if (boss) {
       announce(boss.name + " defeated!");
       return;
@@ -255,9 +317,26 @@ function retry(message) {
 }
 
 function updateGuard(dt) {
+  if (cargoRunning()) {
+    if (hero.x <= 120 && guard.x === 214) return;
+    guard.x = Math.min(cargoAirlock, guard.x + 196 * dt);
+    if (guard.x === cargoAirlock) {
+      guard.phase = "recover";
+      guard.time = 1;
+      guard.y = floor - 24;
+      guard.face = -1;
+      gameAudio.play("equip");
+      announce("The Cell Thief powered up its suit at the airlock!");
+    }
+    return;
+  }
   if (!guard.hp || guard.phase === "sleeping") return;
   guard.hit = Math.max(0, guard.hit - dt);
   guard.time -= dt;
+  if (goliathSlamming()) {
+    updateGoliathSlam(dt);
+    return;
+  }
   if (guard.phase === "flip") {
     const targetY = guard.gravity > 0 ? floor - 24 : ceiling + 24;
     guard.y += clamp(targetY - guard.y, -540 * dt, 540 * dt);
@@ -276,8 +355,10 @@ function updateGuard(dt) {
       guard.time = guard.gun ? .72 : .55;
     } else {
       guard.x += guard.face * 76 * dt;
-      if (guard.x < 690 || guard.x > 875) {
-        guard.x = clamp(guard.x, 690, 875);
+      const leftEdge = guard.home ? guard.home - 115 : cargoChase() ? 710 : 690;
+      const rightEdge = guard.home ? Math.min(940, guard.home + 115) : cargoChase() ? 935 : 875;
+      if (guard.x < leftEdge || guard.x > rightEdge) {
+        guard.x = clamp(guard.x, leftEdge, rightEdge);
         guard.face *= -1;
       }
     }
@@ -288,7 +369,7 @@ function updateGuard(dt) {
     if (guard.gun) {
       const dx = hero.x - guard.x;
       const dy = hero.y - guard.y;
-      for (const spread of lab() ? [-.23, -.11, 0, .11, .23] : (captainRoom() || stasisVault()) ? [-.16, 0, .16] : [0]) {
+      for (const spread of lab() ? [-.23, -.11, 0, .11, .23] : (guardFlips() || stasisVault() || cargoChase()) ? [-.16, 0, .16] : [0]) {
         const angle = Math.atan2(dy, dx) + spread;
         hostile.push({x: guard.x, y: guard.y, vx: Math.cos(angle) * 445, vy: Math.sin(angle) * 445});
       }
@@ -301,7 +382,7 @@ function updateGuard(dt) {
       guard.time = .62;
     }
   } else if (guard.phase === "recover" && guard.time <= 0) {
-    if (captainRoom()) {
+    if (guardFlips()) {
       guard.phase = "flip";
       guard.gravity *= -1;
     } else {
@@ -310,8 +391,60 @@ function updateGuard(dt) {
   }
 }
 
+function updateGoliathSlam(dt) {
+  if (guard.phase === "slamWindup") {
+    if (guard.time > 0) return;
+    guard.phase = "slamWave";
+    guard.time = shockwaveDuration;
+    gameAudio.play("slam");
+  }
+  const distance = Math.abs(hero.x - guard.x);
+  const radius = (shockwaveDuration - guard.time) * shockwaveSpeed;
+  const innerEdge = Math.max(0, radius - dt * shockwaveSpeed);
+  if (hero.y >= floor - 50 && distance >= innerEdge - 20 && distance <= radius + 20) hurt();
+  if (guard.time <= 0) {
+    guard.phase = "recover";
+    guard.time = 1.35;
+    announce("Goliath is recovering. Strike now!");
+  }
+}
+
+function updateRescue(dt) {
+  const usingSwitch = pressed.has("KeyF");
+  if (rescueStep === 0 && usingSwitch && hero.gravity < 0 && near(hero, bulkheadSwitch, 55, 26)) {
+    rescueStep = 1;
+    gameAudio.play("door");
+    announce("Bulkhead open. Use the floor switch to free Rivet.");
+  } else if (rescueStep === 1 && usingSwitch && hero.gravity > 0 && near(hero, cageSwitch, 55, 26)) {
+    rescueStep = 2;
+    gameAudio.play("rivet");
+    announce("Rivet is free and heading for the second gate.");
+  }
+  if (rescueStep === 2) {
+    rivet.x = Math.min(641, rivet.x + 195 * dt);
+    if (rivet.x === 641) {
+      rescueStep = 3;
+      gameAudio.play("door");
+      announce("Rivet opened the second gate. Meet him at the airlock controls.");
+    }
+  }
+  if (rescueStep === 3) {
+    rivet.x = Math.min(airlockSwitch.x, rivet.x + 195 * dt);
+    if (rivet.x === airlockSwitch.x && usingSwitch && hero.gravity < 0 && near(hero, airlockSwitch, 55, 26)) {
+      rescueStep = 4;
+      rivet.flash = .45;
+      gameAudio.play("door");
+      announce("Airlock open. Head to the floor exit with Rivet.");
+    }
+  }
+}
+
 function updateRivet(dt) {
   if (!rivet) return;
+  if (rescueRoom() && rescueStep < 4) {
+    updateRescue(dt);
+    return;
+  }
   rivet.cooldown = Math.max(0, rivet.cooldown - dt);
   rivet.flash = Math.max(0, rivet.flash - dt);
   rivet.gravity = hero.gravity;
@@ -325,13 +458,33 @@ function updateRivet(dt) {
     announce("Rivet activated the switch. The floor door is powered.");
     return;
   }
-  if (!guard.hp || guard.phase === "sleeping" || rivet.cooldown || !near(rivet, guard, 225, 105)) return;
+  if (!guard.hp || guard.phase === "sleeping" || cargoRunning() || goliathSlamming() || guard.blackoutUntil > clock || rivet.cooldown || !near(rivet, guard, 225, 105)) return;
   rivet.flash = .45;
   gameAudio.play("rivet");
   rivet.cooldown = 4;
   guard.phase = "recover";
   guard.time = 1.25;
-  announce(stasisVault() ? "Rivet distracted Goliath." : "Rivet distracted the captain.");
+  announce("Rivet distracted " + (roomBoss()?.name ?? "the captain") + ".");
+}
+
+function updateAlienCalls(dt) {
+  alienCallIn -= dt;
+  if (alienCallIn > 0) return;
+  alienCallIn = 2.8 + Math.random() * 1.8;
+
+  let caller = guard.hp ? guard : null;
+  let distance = caller ? Math.hypot(hero.x - caller.x, hero.y - caller.y) : Infinity;
+  for (const alien of aliens) {
+    if (!alien.hp) continue;
+    const separation = Math.hypot(hero.x - alien.x, hero.y - alien.y);
+    if (separation < distance) {
+      caller = alien;
+      distance = separation;
+    }
+  }
+  if (caller) {
+    gameAudio.play(caller.phase === "sleeping" ? "alienSnore" : caller.flying ? "alienChirp" : "alienChatter");
+  }
 }
 
 function updateNest(dt) {
@@ -342,6 +495,7 @@ function updateNest(dt) {
     egg.timer -= dt;
     if (egg.timer > 0) return true;
     gameAudio.play("hatch");
+    alienCallIn = Math.min(alienCallIn, .35);
     aliens.push({x: egg.x, home: egg.x, y: floor - 14, hp: 1, flying: false});
     return false;
   });
@@ -392,7 +546,7 @@ function updateShots(dt) {
       if (alien.hp) gameAudio.play("hit");
       return false;
     }
-    if (guard.hp && near(shot, guard, 21 + size, 25 + size)) {
+    if (guard.hp && !cargoRunning() && near(shot, guard, 21 + size, 25 + size)) {
       const front = Math.sign(shot.vx) === -guard.face;
       if (!(front && guard.phase === "windup" && !guard.gun)) damageGuard(damage);
       return false;
@@ -445,6 +599,10 @@ function update(dt) {
   const wasGrounded = hero.grounded;
   hero.x = clamp(hero.x + move * 268 * dt, 48, W - 48);
   if (hasSwitch() && !switchHeld) hero.x = Math.min(hero.x, 936);
+  if (rescueRoom()) {
+    if (rescueStep === 0) hero.x = Math.min(hero.x, rescueGates[0] - 25);
+    else if (rescueStep < 3) hero.x = Math.min(hero.x, rescueGates[1] - 25);
+  }
   if (pressed.has("KeyE")) {
     hero.gravity *= -1;
     gameAudio.play("flip");
@@ -514,14 +672,15 @@ function update(dt) {
     for (const alien of aliens) {
       if (alien.hp && near(tip, alien, reach / 2 + 16, 48)) damageAlien(alien, plasma ? 2 : 1);
     }
-    if (guard.hp && near(tip, guard, reach / 2 + 16, 48)) {
+    if (guard.hp && !cargoRunning() && near(tip, guard, reach / 2 + 16, 48)) {
       const blocking = guard.phase === "windup" && !guard.gun && guard.face === -hero.face;
       if (nixRoom()) {
         announce("Nix’s armor deflects swords. Use your blaster.");
       } else if (plasma || !blocking) {
+        const target = guard;
         const waking = guard.phase === "sleeping";
         damageGuard(plasma ? 2 : 1);
-        if (!waking) {
+        if (guard === target && !waking && !goliathSlamming() && !(guard.blackoutUntil > clock)) {
           guard.phase = "recover";
           guard.time = shock ? 1.3 : .34;
         }
@@ -549,13 +708,15 @@ function update(dt) {
     }
     return shot.x > 32 && shot.x < W - 32 && shot.y > ceiling && shot.y < floor;
   });
+  if (mode === "play") updateAlienCalls(dt);
   if (mode !== "play" || exitLocked() || hero.x <= 990 || Math.abs(hero.y - (floor - 20)) >= 44) return;
+  if (rescueRoom() && !near(hero, rivet, 88, 55)) return;
   if (stage < finalStage) {
     advance();
   } else {
     mode = "won";
     gameAudio.play("clear");
-    announce("Stasis Vault cleared");
+    announce("Rivet rescued. Game cleared!");
   }
 }
 
@@ -768,7 +929,7 @@ function reactorBeam() {
 }
 
 function paintDeckBackdrop() {
-  box(0, 0, W, H, stasisVault() ? "#261d3b" : lab() ? "#202339" : reactor() ? "#352432" : "#151c2b");
+  box(0, 0, W, H, rescueRoom() ? "#192f39" : cargoChase() ? "#293239" : trophyRevolt() ? "#392635" : stasisVault() ? "#261d3b" : lab() ? "#202339" : reactor() ? "#352432" : "#151c2b");
   for (let x = 85; x < W; x += 198) {
     box(x, 170, 146, 146, "#384452");
     box(x + 6, 176, 134, 134, "#101426");
@@ -779,7 +940,16 @@ function paintDeckBackdrop() {
   box(0, 0, W, 83, "#151624");
   beam(0, 83, W, 22);
   box(32, 101, W - 64, 4, "#769ac1");
-  if (lab()) {
+  if (cargoChase()) {
+    box(0, floor, W, H - floor, "#090e17");
+    beam(0, floor, cargoGaps[0].x, H - floor);
+    beam(cargoGaps[0].end, floor, cargoGaps[1].x - cargoGaps[0].end, H - floor);
+    beam(cargoGaps[1].end, floor, W - cargoGaps[1].end, H - floor);
+    for (const x of [175, 488, 733]) {
+      box(x, floor - 31, 54, 31, "#5a594a");
+      box(x + 4, floor - 26, 46, 3, "#c1a164");
+    }
+  } else if (lab()) {
     beam(0, floor, labGap.x, H - floor);
     beam(labGap.end, floor, W - labGap.end, H - floor);
     box(labGap.x, floor, labGap.end - labGap.x, H - floor, "#090d17");
@@ -788,9 +958,57 @@ function paintDeckBackdrop() {
   }
 }
 
+function drawRescueArea() {
+  label("RIVET’S RESCUE", W / 2, 160, 26, "#b6f0ea", "center");
+  for (let i = 0; i < rescueGates.length; i++) {
+    const x = rescueGates[i];
+    const open = rescueStep >= (i === 0 ? 1 : 3);
+    box(x - 15, ceiling, 30, 7, "#5b7c83");
+    box(x - 15, floor - 7, 30, 7, "#5b7c83");
+    if (!open) {
+      box(x - 11, ceiling + 7, 22, floor - ceiling - 14, "#405662");
+      for (let y = ceiling + 20; y < floor - 20; y += 24) {
+        box(x - 6, y, 12, 4, "#e7a560");
+      }
+    }
+  }
+  if (rescueStep < 2) {
+    box(503, floor - 58, 63, 5, "#708998");
+    for (let x = 503; x < 566; x += 15) box(x, floor - 53, 3, 53, "#708998");
+    label("RIVET", 533, floor - 80, 13, "#b6f0ea", "center");
+  }
+  const stations = [
+    [bulkheadSwitch.x, ceiling, rescueStep >= 1, "BULKHEAD"],
+    [cageSwitch.x, floor - 8, rescueStep >= 2, "CAGE RELEASE"],
+    [641, floor - 8, rescueStep >= 3, "RIVET’S GATE"],
+    [airlockSwitch.x, floor - 8, (rescueStep >= 4 || (rescueStep === 3 && rivet.x >= airlockSwitch.x)), "RIVET’S PANEL"],
+    [airlockSwitch.x, ceiling, rescueStep >= 4, "AIRLOCK PANEL"]
+  ];
+  for (const [x, y, active, name] of stations) {
+    const color = active ? "#a9f5c8" : "#ffc377";
+    box(x - 19, y, 38, 8, color);
+    label(name, x, y === ceiling ? 132 : floor - 65, 13, color, "center");
+  }
+}
+
 function drawDeck() {
-  if (stasisVault()) {
-    label("STASIS VAULT", W / 2, 146, 26, "#d6aaff", "center");
+  if (rescueRoom()) drawRescueArea();
+  if (stasisVault()) label("STASIS VAULT", W / 2, 146, 26, "#d6aaff", "center");
+  if (cargoChase()) label("CARGO CHASE", W / 2, 146, 26, "#f8bf69", "center");
+  if (trophyRevolt()) {
+    label("TROPHY REVOLT", W / 2, 146, 26, "#f1b1cb", "center");
+    for (let i = 0; i < revoltTrophies.length; i++) {
+      const item = revoltTrophies[i];
+      box(item.x - 52, 201, 104, 88, "#291d2c");
+      box(item.x - 48, 205, 96, 80, "#705363");
+      if (i > revoltWave) {
+        ctx.save();
+        ctx.translate(item.x, 244);
+        ctx.scale(.48, .48);
+        trophy(0, 0, item.color, item.style);
+        ctx.restore();
+      }
+    }
   }
   if (hasSwitch()) {
     box(ceilingSwitch.x - 22, ceiling, 44, 9, switchHeld ? "#9affe2" : "#edca7e");
@@ -808,7 +1026,7 @@ function drawDeck() {
   box(970, 361, 64, 104, exitLocked() ? "#47303d" : "#203b4b");
   const color = exitLocked() ? "#ff897b" : "#8eead9";
   box(977, 373, 50, 4, color);
-  label(stasisVault() ? "EXIT" : captainRoom() ? "NEXT" : "BRIDGE", 1002, 345, 15, color, "center");
+  label(rescueRoom() ? "EXIT" : cargoChase() ? "AIRLOCK" : stage >= 6 ? "NEXT" : "BRIDGE", 1002, 345, 15, color, "center");
 }
 
 function drawRivet() {
@@ -1051,28 +1269,86 @@ function drawRoomBoss(boss) {
   }
 }
 
+function drawGoliathEyes() {
+  shape([[-23,-25],[-5,-18],[-6,-12],[-19,-15]], "#ff537f");
+  shape([[23,-25],[5,-18],[6,-12],[19,-15]], "#ff537f");
+  shape([[-20,-22],[-9,-18],[-17,-17]], "#ffd0dc");
+  shape([[20,-22],[9,-18],[17,-17]], "#ffd0dc");
+  disc(0, -23, 2, "#ff8fae");
+}
+
 function drawGoliath() {
   const sleeping = guard.phase === "sleeping";
-  const bob = sleeping ? Math.sin(clock * 3) * 2 : 0;
+  const bob = sleeping ? Math.sin(clock * 3) * 2
+    : guard.phase === "slamWindup" ? -Math.min(22, (1 - guard.time) * 22) : 0;
+  const scale = 1.25;
   ctx.save();
-  ctx.translate(guard.x, guard.y + (sleeping ? 9 : 0) + bob);
-  ctx.scale(guard.face, 1);
-  const armor = guard.hit ? "#f8dcff" : "#7461a1";
+  ctx.translate(guard.x, floor - (sleeping ? 15 : 24) * scale + bob);
+  ctx.scale(guard.face * scale, scale);
+  const armor = guard.hit ? "#f8dcff" : "#695483";
+  const shellEdge = "#9f83bf";
   box(-36, 12, 27, sleeping ? 3 : 12, "#332848");
   box(9, 12, 28, sleeping ? 3 : 12, "#332848");
-  shape([[-40,5],[-33,-25],[-20,-39],[20,-39],[34,-25],[42,6],[24,18],[-25,18]], armor);
-  shape([[-28,-21],[-18,-33],[18,-33],[28,-21],[20,5],[-19,5]], "#302542");
-  for (const x of [-14, 1, 16]) {
-    box(x - 3, -20, 7, sleeping ? 2 : 8, sleeping ? "#9d91b9" : "#f9b8ec");
+  const hornTip = sleeping ? -37 : -51;
+  shape([[-41,-2],[-42,hornTip],[-25,-29],[-18,-16]], shellEdge);
+  shape([[41,-2],[43,hornTip],[26,-29],[18,-16]], shellEdge);
+  shape([[-43,4],[-35,-23],[-21,-38],[21,-38],[35,-23],[44,4],[25,18],[-25,18]], armor);
+  shape([[-32,-22],[-21,-35],[21,-35],[32,-22],[22,-28],[-22,-28]], shellEdge);
+  shape([[-29,-19],[-18,-30],[18,-30],[29,-19],[21,5],[-21,5]], "#251b37");
+  if (sleeping) {
+    box(-18, -18, 9, 2, "#9d91b9");
+    box(9, -18, 9, 2, "#9d91b9");
+  } else {
+    drawGoliathEyes();
   }
-  box(-12, 9, 24, 4, "#ad8dd2");
-  box(29, -3, 17, 9, "#332848");
-  if (guard.phase === "strike") disc(49, 1, 5, "#ffbfe9");
+  shape([[-18,-3],[-9,1],[9,1],[18,-3],[11,8],[-11,8]], "#160e23");
+  for (const x of [-10, 0, 10]) shape([[x-3,0],[x+3,0],[x,5]], "#b69bc9");
+  box(28, -4, 21, 11, "#332848");
+  box(38, -2, 10, 2, sleeping ? "#9d91b9" : "#ff537f");
+  if (guard.phase === "strike") disc(51, 1, 5, "#ffbfe9");
   ctx.restore();
 
-  label(sleeping ? "GOLIATH · Zzz" : "GOLIATH", guard.x, guard.y - 65, 17, vaultBoss.color, "center");
+  label(sleeping ? "GOLIATH · Zzz" : "GOLIATH", guard.x, guard.y - 88, 17, vaultBoss.color, "center");
   for (let i = 0; i < vaultBoss.health; i++) {
-    box(guard.x - 54 + i * 11, guard.y - 55, 8, 4, i < guard.hp ? vaultBoss.color : "#4c3b61");
+    box(guard.x - 54 + i * 11, guard.y - 78, 8, 4, i < guard.hp ? vaultBoss.color : "#4c3b61");
+  }
+}
+
+function drawCellThief() {
+  const fleeing = cargoRunning();
+  if (!fleeing) drawRoomBoss(cargoBoss);
+  ctx.save();
+  ctx.translate(guard.x, guard.y);
+  ctx.scale(guard.face, 1);
+  if (fleeing) {
+    const stride = Math.sin(clock * 24) * 5;
+    shape([[-19,3],[-16,-18],[-5,-25],[14,-22],[20,-9],[12,12],[-12,12]], "#447f75");
+    box(1, -15, 11, 4, "#d2ffb4");
+    box(-16, 10 + stride, 10, 10, "#283b4e");
+    box(4, 10 - stride, 10, 10, "#283b4e");
+  }
+  box(fleeing ? 14 : -9, fleeing ? -6 : 0, 17, 10, "#ffcf72");
+  box(fleeing ? 17 : -6, fleeing ? -4 : 2, 11, 6, "#fff2a3");
+  ctx.restore();
+  if (fleeing) label("STOLEN CELL", guard.x, guard.y - 39, 15, cargoBoss.color, "center");
+}
+
+function drawRevoltTrophy() {
+  const item = roomBoss();
+  ctx.save();
+  ctx.translate(guard.x, guard.y);
+  ctx.scale(.52, (guard.gravity || 1) * .52);
+  trophy(0, 0, guard.hit ? "#f8d6a4" : item.color, item.style);
+  ctx.restore();
+  if (!guard.gun && guard.phase === "strike") {
+    const x = guard.x + guard.face * 31;
+    shape([[x, guard.y - 17], [x + guard.face * 38, guard.y - 7],
+      [x + guard.face * 49, guard.y + 10], [x + guard.face * 23, guard.y + 4]], "#ffc198");
+  }
+  const side = guard.gravity || 1;
+  label(item.name.toUpperCase(), guard.x, guard.y - side * 54, 15, "#ffd8de", "center");
+  for (let i = 0; i < item.health; i++) {
+    box(guard.x - item.health * 5.5 + i * 11, guard.y - side * 44, 8, 4, "#ffd8de" + (i < guard.hp ? "" : "44"));
   }
 }
 
@@ -1091,6 +1367,14 @@ function drawGuard() {
   }
   if (stasisVault()) {
     drawGoliath();
+    return;
+  }
+  if (cargoChase()) {
+    drawCellThief();
+    return;
+  }
+  if (trophyRevolt()) {
+    drawRevoltTrophy();
     return;
   }
   const boss = roomBoss();
@@ -1221,6 +1505,35 @@ function drawExplosions() {
   ctx.restore();
 }
 
+function drawVaultEffects() {
+  if (guard.phase === "slamWindup") {
+    box(32, floor - 4, W - 64, 4, "#ffb15c");
+  } else if (guard.phase === "slamWave") {
+    const radius = (shockwaveDuration - guard.time) * shockwaveSpeed;
+    for (const x of [guard.x - radius, guard.x + radius]) {
+      shape([[x - 26, floor], [x - 12, floor - 14], [x, floor - 46],
+        [x + 12, floor - 14], [x + 26, floor]], "#ff6b72");
+      disc(x, floor - 10, 7, "#ffe5a3");
+    }
+  }
+
+  const remaining = guard.blackoutUntil - clock;
+  if (!(remaining > 0)) return;
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const flicker = !reducedMotion && remaining < .55 && remaining > .37 ? .38 : 0;
+  ctx.save();
+  ctx.globalAlpha = clamp(remaining * 3, 0, .93) - flicker;
+  box(0, 0, W, H, "#090510");
+  ctx.restore();
+  if (guard.hp && remaining > .12 && remaining < 1.07) {
+    ctx.save();
+    ctx.translate(guard.x, floor - 30);
+    ctx.scale(guard.face * 1.25, 1.25);
+    drawGoliathEyes();
+    ctx.restore();
+  }
+}
+
 function drawBackdrop() {
   const paint = hasRivet() ? paintDeckBackdrop : hatchery() ? paintNestBackdrop : paintRoomBackdrop;
   if (!backdropContext) {
@@ -1267,6 +1580,7 @@ function draw() {
   }
   drawHero();
   if (rivet) drawRivet();
+  if (stasisVault()) drawVaultEffects();
   label("INTEGRITY", 35, 38, 15, "#d0ad95");
   for (let i = 0; i < 3; i++) box(35 + i * 27, 48, 23, 9, i < hero.hp ? "#84e1e2" : "#493743");
   if (reward) {
@@ -1279,19 +1593,27 @@ function draw() {
   if (wheel) drawWheel();
   if (mode !== "play") {
     box(0, 0, W, H, "#110f18d9");
-    label(mode === "won" ? "STASIS VAULT CLEARED" : notice, W / 2, 253, 43, "#ffe2ae", "center");
+    label(mode === "won" ? "RIVET RESCUED" : notice, W / 2, 253, 43, "#ffe2ae", "center");
     label(mode === "won" ? "Press R or tap Restart to play again" : "Retrying this section…", W / 2, 296, 22, "#aadfe1", "center");
   }
   const message = mode === "won" ? "Game cleared"
+    : rescueRoom() ? rescueInstructions[rescueStep]
     : hasSwitch() && !switchHeld ? "Flip to the ceiling switch and press F"
     : stage === 5 ? "Floor door open"
+    : cargoRunning() ? "Follow the thief · Flip over the cargo gaps (E)"
+    : cargoChase() && guard.hp ? "Defeat the Cell Thief to reclaim the power cell"
+    : trophyRevolt() && guard.hp ? "Trophy " + (revoltWave + 1) + " of " + revoltTrophies.length + " · " + roomBoss().name
+    : stasisVault() && goliathSlamming() && guard.hp ? "Shockwave · Flip to the ceiling (E)"
     : stasisVault() && guard.hp ? (guard.phase === "sleeping" ? "Hit Goliath to wake it" : "Defeat Goliath to open the exit")
     : captainRoom() && guard.hp ? (rivet.cooldown ? "Rivet recharging · " + Math.ceil(rivet.cooldown) + "s" : "Press F near the captain to distract it")
     : stage === 0 && guard.hp ? "Defeat Dash to open the exit"
     : nixRoom() && guard.hp ? "Defeat Nix with your blaster (J)"
     : nixRoom() && exitLocked() ? "Aliens left at the gate: " + aliensLeft()
     : guard.hp ? "Defeat the guard to open the exit" : "Exit open";
-  const roomName = stasisVault() ? "Level 6 · Stasis Vault"
+  const roomName = rescueRoom() ? "Level 9 · Rivet’s Rescue"
+    : trophyRevolt() ? "Level 8 · Trophy Revolt"
+    : cargoChase() ? "Level 7 · Cargo Chase"
+    : stasisVault() ? "Level 6 · Stasis Vault"
     : lab() ? "Level 5 · Gravity Lab"
     : reactor() ? "Level 4 · Reactor Core"
     : commandDeck() ? "Level 3 · Command Deck / " + deckRoom()
@@ -1417,7 +1739,7 @@ function frame(now) {
   const menuIsOpen = menuOpen();
   if (!menuIsOpen || !menuWasOpen) draw();
   menuWasOpen = menuIsOpen;
-  gameAudio.music(lab() || stasisVault() ? 4 : reactor() ? 3 : commandDeck() ? 2 : hatchery() ? 1 : 0, mode === "play" && !wheel && !menuIsOpen);
+  gameAudio.music(lab() || stage >= 9 ? 4 : reactor() ? 3 : commandDeck() ? 2 : hatchery() ? 1 : 0, mode === "play" && !wheel && !menuIsOpen);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
